@@ -1,0 +1,43 @@
+[project]
+name = "fsoft-ai"
+version = "0.1.0"
+description = "Service RAG cho hệ thống học từ vựng tiếng Anh"
+readme = "README.md"
+authors = [
+    { name = "sa.hd", email = "hoangsaa2006@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "anyio>=4.14.2",
+    "fastapi>=0.141.1",
+    "fastembed>=0.8.0",
+    "httpx>=0.28.1",
+    "numpy>=2.5.2",
+    "openai>=3.1.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "rank-bm25>=0.2.2",
+    "structlog>=26.1.0",
+    "uvicorn[standard]>=0.52.3",
+]
+
+# Đây là service, không phải library -> không build, không cần build-backend.
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.21",
+    "ruff>=0.16.3",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

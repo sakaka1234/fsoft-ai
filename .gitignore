@@ -1,0 +1,22 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# ---- Secret ----
+.env
+
+# ---- Dữ liệu sinh ra lúc chạy ----
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# ---- Cache model fastembed (486 MB, không commit) ----
+.cache/
+
+# ---- Công cụ ----
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
