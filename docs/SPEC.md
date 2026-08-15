@@ -314,15 +314,21 @@ Bật WAL mode. Chi tiết ở [mục 7](#7-data-model).
      với mỗi thẻ:
         text = build_text(card)
         hash = sha256(text)
-        nếu hash == hash đã lưu và model_version khớp  ->  BỎ QUA, không embed
-        ngược lại  ->  embed, ghi SQLite, cập nhật vector index trong RAM
+        nếu hash khác hash đã lưu, HOẶC model_version lệch
+             ->  EMBED lại, ghi SQLite, cập nhật vector index
+        ngược lại nếu deck_id / deck_title / audio_url khác bản đã lưu
+             ->  ghi SQLite và cập nhật index, DÙNG LẠI vector cũ (0 embedding)
+        ngược lại
+             ->  BỎ QUA hẳn
      nếu last == true: thoát vòng
      page += 1
 3. last_sync_ts = GIÁ TRỊ updatedAt LỚN NHẤT nhìn thấy trong phản hồi
    (KHÔNG dùng datetime.now())
 ```
 
-**Hai chi tiết quan trọng:**
+**Ba chi tiết quan trọng:**
+
+**"Phải embed lại" và "phải ghi lại" là hai câu hỏi khác nhau.** `content_hash` chỉ phủ text đưa vào embedding ([mục 7.1](#71-template-text-đưa-vào-embedding)). Ba field `deck_id`, `deck_title`, `audio_url` **không** nằm trong text đó. Nếu chỉ dựa vào hash để quyết định thì thẻ chuyển sang deck khác sẽ giữ nguyên `deck_id` cũ trong index — vừa sai kết quả tìm kiếm, vừa là **lỗ hổng phạm vi**: thẻ đã chuyển đi vẫn tìm thấy được ở deck cũ. Nhánh thứ hai xử lý đúng chỗ này mà không tốn một lời gọi embedding nào.
 
 **Chồng lấn 5 giây cộng `content_hash`.** Nếu nhiều thẻ có cùng `updated_at` và nằm vắt qua ranh giới trang, dùng `>` sẽ **bỏ sót bản ghi**. Cách xử lý: lùi mốc 5 giây và chấp nhận kéo trùng. `content_hash` khiến việc kéo trùng thành no-op — không embed lại, không tốn gì. Toàn bộ vòng lặp trở nên idempotent.
 
@@ -779,6 +785,8 @@ POST /internal/v1/search
 POST /internal/v1/quiz/generate        blocking, 3–10s
 GET  /internal/v1/index/status
 POST /internal/v1/index/sync           kích hoạt đồng bộ thủ công
+       ?sweep=true   quét thêm ID để phát hiện thẻ bị xoá
+       ?full=true    bỏ qua con trỏ, kéo lại toàn bộ (vẫn rẻ nhờ content_hash)
 GET  /internal/v1/stats?from=&to=
 GET  /healthz                          sống chưa (không cần token)
 GET  /readyz                           model nạp xong và index sẵn sàng chưa
@@ -1197,14 +1205,15 @@ Kết quả: `docs/M0_FINDINGS.md`.
 **Acceptance (chạy hết bằng `AI_SOURCE_MODE=fixture`, không cần backend):**
 - [ ] `uv run uvicorn app.main:app` khởi động sạch, tự tạo file SQLite và bảng
 - [ ] Sau chu kỳ đồng bộ đầu, `index/status` cho `card_count = 24`, `index_size = 24`
-- [ ] Chạy đồng bộ lần hai → `last_sync_embedded = 0`, `last_sync_skipped = 24` (`content_hash` hoạt động)
+- [ ] Chạy `POST /internal/v1/index/sync?full=true` lần hai → `last_sync_embedded = 0`, `last_sync_skipped = 24` (`content_hash` hoạt động). Phải dùng `full=true`: chu kỳ gia tăng bình thường chỉ hỏi lại vài thẻ có `updatedAt` mới nhất nên chỉ cho `skipped = 3`
 - [ ] Sửa `meaning` của thẻ 101 trong fixture, đồng bộ lại → `last_sync_embedded = 1`, `content_hash` đổi
 - [ ] Xoá thẻ 101 khỏi fixture, chạy quét ID → thẻ biến mất khỏi SQLite và khỏi index
-- [ ] Đổi `deckId` của thẻ 101 → `card.deck_id` và `_rows_of_deck` cập nhật theo
+- [ ] Đổi `deckId` của thẻ 101 → `card.deck_id` và `_rows_of_deck` cập nhật theo, và `last_sync_embedded = 0` (dùng lại vector cũ)
+- [ ] Đổi `audioUrl` hoặc `deckTitle` của thẻ 101 → cập nhật vào SQLite, `last_sync_embedded = 0`
 - [ ] Restart service → index nạp từ SQLite, **không** gọi lại nguồn, log ghi số vector và thời gian
 - [ ] Xoá file SQLite rồi restart → tự đồng bộ lại toàn bộ, về đúng 24 thẻ
 - [ ] `embed_query("xin chào")` trả 384 chiều, norm ≈ 1.0
-- [ ] `cosine(embed("lo lắng"), embed("bồn chồn"))` > `cosine(embed("lo lắng"), embed("cái bàn"))`
+- [ ] `cosine(embed_query("lo lắng"), embed_passage("bồn chồn"))` > `cosine(embed_query("lo lắng"), embed_passage("cái bàn"))`. **Bắt buộc đo theo chiều bất đối xứng này** — E5 so `query` với `query` cho kết quả đảo ngược, xem `docs/M0_FINDINGS.md` mục 2.5
 - [ ] Thẻ 402 có `audioUrl = null` được nạp bình thường, không lỗi
 - [ ] `/readyz` trả `503` khi model chưa nạp xong
 - [ ] `AI_SOURCE_MODE=http` trỏ vào URL chết → service **vẫn khởi động**, `last_sync_error` có nội dung, `/healthz` vẫn `200`

@@ -179,6 +179,44 @@ hoạt động.
 > thứ có ý nghĩa là **thứ hạng tương đối**, không phải ngưỡng tuyệt đối. Đây chính là lý do
 > SPEC §11.3 hợp nhất bằng RRF (dựa trên rank) chứ không dựa trên score thô.
 
+#### E5 là model BẤT ĐỐI XỨNG — đo thêm ở M1
+
+Đo bốn kiểu ghép cặp trên cùng một bộ ba từ, để trả lời câu "so hai đoạn text bất kỳ thì
+dùng prefix nào":
+
+| Cách ghép | `cos(lo lắng, bồn chồn)` | `cos(lo lắng, cái bàn)` | Xếp đúng? |
+|---|---:|---:|:---:|
+| `query:` ↔ `query:` | 0.8349 | **0.8474** | ❌ |
+| không prefix | 0.8819 | **0.8862** | ❌ |
+| `passage:` ↔ `passage:` | **0.9271** | 0.9076 | ✅ |
+| **`query:` ↔ `passage:`** | **0.8246** | 0.8108 | ✅ |
+
+Và trên kịch bản RAG thật (câu hỏi tiếng Việt ↔ thẻ đã serialize):
+
+| Thẻ | Điểm |
+|---|---:|
+| `apprehensive` | 0.8919 |
+| `anxious` | 0.8514 |
+| `meticulous` | 0.8402 |
+| `deforestation` | 0.8276 |
+
+**Kết luận:** E5 được huấn luyện cho ghép **bất đối xứng** `query: ` ↔ `passage: `. Đó đúng
+là cách retrieval dùng nó, nên retrieval an toàn. Nhưng so **hai câu hỏi với nhau**
+(`query:` ↔ `query:`) là dùng model ngoài phân phối huấn luyện — kết quả có thể **đảo ngược**,
+đúng như bảng trên.
+
+Hai chỗ trong hệ thống có so query với query, cần cẩn thận:
+
+| Chỗ | Ảnh hưởng | Xử lý |
+|---|---|---|
+| **M4 semantic cache** (`query` mới ↔ `query` đã cache) | Thấp. Ngưỡng 0.97 rất cao, chỉ khớp câu gần như giống hệt | Giữ nguyên |
+| **M2 intent centroid** (`query` ↔ centroid câu mẫu) | **Cao.** Cặp không liên quan vẫn đạt ~0.85, nên ngưỡng `AI_INTENT_THRESHOLD=0.50` sẽ **không bao giờ** phân loại được `OUT_OF_SCOPE` | Phải hiệu chỉnh lại ngưỡng bằng dữ liệu thật ở M2, đừng tin con số 0.50 trong SPEC |
+
+> Vì vậy acceptance của SPEC §11.2 — `cos(embed("lo lắng"), embed("bồn chồn")) >
+> cos(embed("lo lắng"), embed("cái bàn"))` — **chỉ đúng khi ghép bất đối xứng**. Test ở
+> `tests/test_embedding.py` viết theo đúng chiều mà ứng dụng thật sử dụng, và có thêm một
+> test ghim lại hành vi query↔query ở trên để M2 không bị bất ngờ.
+
 ### 2.6 RAM và tốc độ
 
 ```text
