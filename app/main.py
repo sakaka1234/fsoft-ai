@@ -19,6 +19,7 @@ from app.api.v1 import chat as chat_api
 from app.api.v1 import index as index_api
 from app.api.v1 import quiz as quiz_api
 from app.api.v1 import search as search_api
+from app.api.v1 import stats as stats_api
 from app.chat.orchestrator import ChatOrchestrator
 from app.chat.semantic_cache import SemanticCache
 from app.config import Settings, get_settings, resolve_path
@@ -154,6 +155,7 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
             llm=llm,
             prompts=prompts,
             cache=cache,
+            usage_repo=usage_repo,
         ),
         quiz=QuizGenerator(settings=settings, index=index, llm=llm, prompts=prompts),
     )
@@ -259,6 +261,7 @@ def create_app(settings: Settings | None = None, encoder: Encoder | None = None)
     app.include_router(search_api.router)
     app.include_router(chat_api.router)
     app.include_router(quiz_api.router)
+    app.include_router(stats_api.router)
 
     @app.get("/healthz", tags=["Health"])
     async def healthz() -> dict:

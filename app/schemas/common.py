@@ -28,3 +28,40 @@ class SyncTriggerResult(BaseModel):
     deleted: int
     duration_ms: int
     error: str | None
+
+
+class MetricTarget(BaseModel):
+    """
+    Một chỉ số kèm ngưỡng mục tiêu ở SPEC muc 11.8.
+
+    Trả kèm `target` và `ok` để người đọc bảng stats không phải tra lại SPEC
+    mới biết con số đang tốt hay xấu.
+    """
+
+    value: float
+    target: float
+    ok: bool
+    comparison: str  # ">=" hoặc "<"
+
+
+class UsageStatsResponse(BaseModel):
+    """Phản hồi của GET /internal/v1/stats. SPEC muc 11.8."""
+
+    since: str
+    until: str
+
+    calls: int
+    chat_turns: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+    by_task: dict[str, int]
+    by_answer_source: dict[str, int]
+
+    free_ratio: MetricTarget
+    avg_tokens_per_chat: MetricTarget
+    latency_p95_ms: MetricTarget
+    error_rate: MetricTarget
+
+    all_targets_met: bool

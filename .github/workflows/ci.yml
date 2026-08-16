@@ -1,0 +1,78 @@
+name: CI
+
+# SPEC muc 11.8 mục 3: bộ đo retrieval chạy trong CI, lưu lịch sử Recall@5 để
+# phát hiện hồi quy. Toàn bộ job chạy offline — không cần backend Java, không
+# gọi Groq — nhờ AI_SOURCE_MODE=fixture.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AI_SOURCE_MODE: fixture
+  AI_SYNC_ENABLED: "false"
+  AI_INTERNAL_TOKEN: ci-token
+  # Không có khoá Groq trong CI. Test nào cần LLM đều dùng transport giả; test
+  # `live` bị loại sẵn qua addopts trong pyproject.
+  AI_LLM_API_KEY: ""
+  FASTEMBED_CACHE_PATH: .cache/fastembed
+  OMP_NUM_THREADS: "1"
+  ORT_NUM_THREADS: "1"
+
+jobs:
+  kiem-tra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cài uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Cài Python và dependency
+        run: uv sync --frozen
+
+      # Model ONNX nặng 486 MB. Không cache thì mỗi lần chạy CI đều tải lại,
+      # vừa chậm vừa dễ bị Hugging Face chặn vì gọi quá nhiều.
+      - name: Cache model embedding
+        uses: actions/cache@v4
+        with:
+          path: .cache/fastembed
+          key: fastembed-${{ hashFiles('app/embedding/encoder.py') }}-multilingual-e5-small
+
+      - name: Tải model nếu cache trượt
+        run: uv run python scripts/download_model.py
+
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check app tests
+
+      - name: Mypy
+        run: uv run mypy app
+
+      - name: Test
+        run: uv run pytest -q
+
+      # Chạy riêng sau test: đây là cổng chặn hồi quy CHẤT LƯỢNG, khác với
+      # test là cổng chặn hồi quy HÀNH VI. Recall tụt mà test vẫn xanh là
+      # chuyện hoàn toàn có thể xảy ra.
+      - name: Bộ đo retrieval
+        run: uv run python scripts/run_eval.py --json metrics/eval_history.jsonl
+
+      - name: Lưu lịch sử số đo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-history-${{ github.sha }}
+          path: metrics/eval_history.jsonl
+          retention-days: 90

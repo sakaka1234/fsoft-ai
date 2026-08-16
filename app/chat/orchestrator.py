@@ -20,6 +20,7 @@ thuộc hoàn toàn vào việc các nhánh rẻ được thử trước.
 """
 
 import re
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -37,6 +38,7 @@ from app.retrieval.context import build_context
 from app.retrieval.hybrid import HybridRetriever, RetrievalHit
 from app.retrieval.intent import IntentClassifier
 from app.schemas.chat import AnswerSource, Intent
+from app.store.usage_repo import UsageRepo
 
 log = get_logger(__name__)
 
@@ -165,6 +167,7 @@ class ChatOrchestrator:
         llm: LlmClient,
         prompts: PromptRegistry,
         cache: SemanticCache,
+        usage_repo: UsageRepo,
     ) -> None:
         self._settings = settings
         self._encoder = encoder
@@ -173,6 +176,30 @@ class ChatOrchestrator:
         self._llm = llm
         self._prompts = prompts
         self._cache = cache
+        self._usage = usage_repo
+
+    async def _log_free_turn(self, intent: Intent, source: AnswerSource, started: float) -> None:
+        """
+        Lượt 0 token cũng phải để lại dấu vết trong `usage_log`.
+
+        `LlmClient` chỉ ghi khi thật sự gọi LLM. Nếu không ghi thêm ở đây thì
+        mẫu số của chỉ số quan trọng nhất (SPEC muc 11.8: tỷ lệ lượt miễn phí
+        ≥ 40%) chỉ chứa đúng những lượt TỐN tiền — tỷ lệ sẽ luôn bằng 0 kể cả
+        khi hệ thống đang chạy hoàn hảo, và ta sẽ đọc nhầm thành thảm hoạ.
+
+        Ghi ở `prepare()` chứ không ở `chat()` vì cả luồng blocking lẫn luồng
+        streaming đều đi qua đây.
+        """
+
+        await self._usage.insert(
+            task="CHAT",
+            provider="local",
+            model="-",
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            success=True,
+            answer_source=source.value,
+            intent=intent.value,
+        )
 
     # ---------------------------------------------------------------
     # Bước 1-9
@@ -188,6 +215,7 @@ class ChatOrchestrator:
         top_k: int | None = None,
         ready: bool = True,
     ) -> PreparedTurn:
+        started = time.perf_counter()
         history = history or []
         top_k = top_k or self._settings.ai_top_k
 
@@ -215,6 +243,8 @@ class ChatOrchestrator:
         canned = canned_answer(intent)
 
         if canned is not None:
+            await self._log_free_turn(intent, AnswerSource.CANNED, started)
+
             return PreparedTurn(
                 intent=intent,
                 citations=[],
@@ -243,6 +273,8 @@ class ChatOrchestrator:
                 citations = to_citations(hits[:1])
                 mark_used_citations(direct, citations)
 
+                await self._log_free_turn(intent, AnswerSource.DIRECT_LOOKUP, started)
+
                 return PreparedTurn(
                     intent=intent,
                     citations=citations,
@@ -264,6 +296,8 @@ class ChatOrchestrator:
             restored = [Citation(**item) for item in cached.citations]
 
             log.info("cache_hit", intent=intent.value, scope=scope[:12])
+
+            await self._log_free_turn(intent, AnswerSource.CACHE, started)
 
             return PreparedTurn(
                 intent=intent,

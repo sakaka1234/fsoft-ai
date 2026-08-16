@@ -16,6 +16,9 @@ data/
 # ---- Cache model fastembed (486 MB, không commit) ----
 .cache/
 
+# ---- Số đo do CI sinh ra, lưu dạng artifact chứ không commit ----
+metrics/
+
 # ---- Công cụ ----
 .pytest_cache/
 .ruff_cache/

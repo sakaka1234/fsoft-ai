@@ -2,14 +2,19 @@
 Chạy bộ đo retrieval trên fixture. SPEC muc 11.3 mục 5.
 
     uv run python scripts/run_eval.py
-    uv run python scripts/run_eval.py --scores   # in thêm điểm semantic thô
+    uv run python scripts/run_eval.py --scores          # in thêm điểm semantic thô
+    uv run python scripts/run_eval.py --json out.json   # ghi số liệu cho CI
 
 Không cần backend Java, không gọi LLM. Thoát với mã 1 nếu dưới ngưỡng, để cắm
 thẳng vào CI được (SPEC muc 11.8 mục 3).
 """
 
 import asyncio
+import json
+import os
+import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -78,10 +83,71 @@ async def evaluate(show_scores: bool = False) -> EvalReport:
         service.db.close_sync()
 
 
+def _current_commit() -> str:
+    """SHA ngắn để đối chiếu số đo với đúng lần commit sinh ra nó."""
+
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=PROJECT_ROOT,
+        ).stdout.strip()
+
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _json_target() -> Path | None:
+    if "--json" not in sys.argv:
+        return None
+
+    position = sys.argv.index("--json")
+
+    if position + 1 >= len(sys.argv):
+        raise SystemExit("--json cần kèm đường dẫn tệp.")
+
+    return Path(sys.argv[position + 1])
+
+
+def _write_history(target: Path, report: EvalReport) -> None:
+    """
+    Nối thêm một dòng JSON, không ghi đè.
+
+    Định dạng JSON Lines để lịch sử chỉ có thêm chứ không bao giờ mất: mỗi lần
+    chạy là một dòng, đọc bằng `pandas.read_json(lines=True)` hoặc `jq`.
+    SPEC muc 11.8 mục 3 cần lịch sử Recall@5 để phát hiện hồi quy, mà một con
+    số đơn lẻ thì không nói lên xu hướng gì.
+    """
+
+    record = {
+        "at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "commit": _current_commit(),
+        "ref": os.environ.get("GITHUB_REF_NAME", ""),
+        "recall_at_5": round(report.recall_at_5, 4),
+        "mrr": round(report.mrr, 4),
+        "intent_accuracy": round(report.intent_accuracy, 4),
+        "cases": len(report.outcomes),
+    }
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    print(f"\nĐã ghi số đo vào {target}")
+
+
 def main() -> int:
     report = asyncio.run(evaluate(show_scores="--scores" in sys.argv))
 
     print(report.format_table())
+
+    target = _json_target()
+
+    if target is not None:
+        _write_history(target, report)
 
     failed = (
         report.recall_at_5 < RECALL_THRESHOLD
