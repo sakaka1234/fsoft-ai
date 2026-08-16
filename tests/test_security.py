@@ -5,6 +5,7 @@ fsoft-ai không có public domain, nhưng X-Internal-Token vẫn là lớp phòn
 thứ hai và phải chặt.
 """
 
+import time
 from pathlib import Path
 
 import pytest
@@ -18,9 +19,31 @@ TOKEN = "test-token"
 HEADERS = {"X-Internal-Token": TOKEN}
 
 
+def wait_until_ready(test_client: TestClient, timeout_seconds: float = 60.0) -> None:
+    """
+    Chờ task warmup nền chạy xong.
+
+    Khởi động cố ý KHÔNG chặn, nên ngay sau khi lifespan trả về thì model có
+    thể vẫn đang nạp và centroid intent vẫn đang được embed. Test nào cần
+    service sẵn sàng thì phải chờ tường minh, đừng dựa vào may rủi thời điểm.
+    """
+
+    deadline = time.monotonic() + timeout_seconds
+
+    while time.monotonic() < deadline:
+        if test_client.get("/readyz").status_code == 200:
+            return
+
+        time.sleep(0.1)
+
+    raise TimeoutError("Service không sẵn sàng trong thời gian chờ")
+
+
 @pytest.fixture
 def client(settings: Settings, encoder: Encoder):
     with TestClient(create_app(settings, encoder=encoder)) as test_client:
+        wait_until_ready(test_client)
+
         yield test_client
 
 
@@ -32,6 +55,8 @@ def client_backend_chet(settings: Settings, encoder: Encoder):
     settings.ai_backend_url = "http://127.0.0.1:9/fsoft"
 
     with TestClient(create_app(settings, encoder=encoder)) as test_client:
+        wait_until_ready(test_client)
+
         yield test_client
 
 
@@ -203,6 +228,110 @@ def test_timestamp_dung_hau_to_z(client: TestClient) -> None:
     assert body["last_sync_ts"].endswith("Z")
     assert body["last_sync_at"].endswith("Z")
     assert "+00:00" not in body["last_sync_ts"]
+
+
+# ---------------------------------------------------------------------
+# POST /search — ranh giới phạm vi
+# ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def searchable(client: TestClient) -> TestClient:
+    client.post("/internal/v1/index/sync", headers=HEADERS)
+
+    return client
+
+
+def test_search_allowed_deck_ids_rong_thi_400(searchable: TestClient) -> None:
+    """
+    Acceptance SPEC muc 11.3: danh sách rỗng phải FAIL ĐÓNG.
+
+    Đây là lỗi kinh điển — hiểu rỗng thành "không lọc gì" thay vì "không được
+    phép gì" là lộ toàn bộ bộ thẻ của mọi người dùng.
+    """
+
+    response = searchable.post(
+        "/internal/v1/search",
+        headers=HEADERS,
+        json={"query": "resilient nghĩa là gì", "allowed_deck_ids": []},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_SCOPE"
+
+
+def test_search_scope_deck_ngoai_pham_vi_thi_400(searchable: TestClient) -> None:
+    """Acceptance: scope_deck_id=3 với allowed_deck_ids=[1,2] -> 400."""
+
+    response = searchable.post(
+        "/internal/v1/search",
+        headers=HEADERS,
+        json={
+            "query": "deforestation nghĩa là gì",
+            "allowed_deck_ids": [1, 2],
+            "scope_deck_id": 3,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_SCOPE"
+
+
+def test_search_scope_deck_hop_le_thu_hep_ket_qua(searchable: TestClient) -> None:
+    response = searchable.post(
+        "/internal/v1/search",
+        headers=HEADERS,
+        json={"query": "từ nào chỉ cảm giác lo lắng", "allowed_deck_ids": [1, 2], "top_k": 5},
+    )
+    rong = searchable.post(
+        "/internal/v1/search",
+        headers=HEADERS,
+        json={
+            "query": "từ nào chỉ cảm giác lo lắng",
+            "allowed_deck_ids": [1, 2],
+            "scope_deck_id": 2,
+            "top_k": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    assert all(r["deck_id"] == 2 for r in rong.json()["results"])
+
+
+def test_search_can_token(searchable: TestClient) -> None:
+    response = searchable.post(
+        "/internal/v1/search",
+        json={"query": "resilient", "allowed_deck_ids": [1]},
+    )
+
+    assert response.status_code == 401
+
+
+def test_search_tra_dung_shape_va_khong_ton_token(searchable: TestClient) -> None:
+    response = searchable.post(
+        "/internal/v1/search",
+        headers=HEADERS,
+        json={"query": "resilient nghĩa là gì", "allowed_deck_ids": [1], "top_k": 3},
+    )
+    body = response.json()
+
+    assert response.status_code == 200
+    assert set(body) == {"results", "latency_ms", "candidate_count"}
+    assert body["results"][0]["card_id"] == 101
+    assert body["results"][0]["word"] == "resilient"
+    assert body["results"][0]["match_type"] == "EXACT"
+    assert body["results"][0]["deck_title"] == "TOEIC - Cảm xúc & Tính cách"
+
+
+def test_search_ngoai_pham_vi_tra_ve_rong(searchable: TestClient) -> None:
+    response = searchable.post(
+        "/internal/v1/search",
+        headers=HEADERS,
+        json={"query": "deforestation nghĩa là gì", "allowed_deck_ids": [1, 2]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"] == []
 
 
 def test_quet_id_qua_endpoint_xoa_the_da_bi_go(client: TestClient, fixture_file: Path) -> None:

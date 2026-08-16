@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 
-from app.schemas.card import CardToStore, IndexRow
+from app.schemas.card import CardToStore, IndexRow, SourceCard, StoredCard
 from app.store.db import Database
 
 VECTOR_DTYPE = "<f4"
@@ -186,6 +186,38 @@ class CardRepo:
                 card_id=row["card_id"],
                 deck_id=row["deck_id"],
                 word=row["word"],
+                vector=blob_to_vector(row["vector"]),
+            )
+            for row in rows
+        ]
+
+    async def load_all(self) -> list[StoredCard]:
+        """
+        Nạp toàn bộ thẻ kèm vector để dựng `SearchIndex` lúc khởi động.
+
+        Đường nóng không chạm SQLite, nên mọi text cần cho phản hồi và cho
+        prompt phải nằm sẵn trong RAM.
+        """
+
+        rows = await self._db.query("SELECT * FROM card ORDER BY card_id")
+
+        return [
+            StoredCard(
+                card=SourceCard(
+                    card_id=row["card_id"],
+                    deck_id=row["deck_id"],
+                    deck_title=row["deck_title"],
+                    word=row["word"],
+                    phonetic=row["phonetic"],
+                    part_of_speech=row["part_of_speech"],
+                    meaning=row["meaning"],
+                    definition_en=row["definition_en"],
+                    example_sentence=row["example_sentence"],
+                    example_meaning=row["example_meaning"],
+                    audio_url=row["audio_url"],
+                    note=row["note"],
+                    source_updated_at=row["source_updated_at"],
+                ),
                 vector=blob_to_vector(row["vector"]),
             )
             for row in rows

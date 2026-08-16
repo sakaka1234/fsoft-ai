@@ -16,11 +16,14 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.api.v1 import index as index_api
+from app.api.v1 import search as search_api
 from app.config import Settings, get_settings, resolve_path
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.embedding.encoder import Encoder
-from app.embedding.vector_index import VectorIndex
+from app.retrieval.hybrid import HybridRetriever
+from app.retrieval.intent import IntentClassifier
+from app.retrieval.search_index import SearchIndex
 from app.store.card_repo import CardRepo
 from app.store.db import Database
 from app.store.sync_state_repo import SyncStateRepo
@@ -42,10 +45,12 @@ class Service:
     card_repo: CardRepo
     sync_state_repo: SyncStateRepo
     usage_repo: UsageRepo
-    index: VectorIndex
+    index: SearchIndex
     encoder: Encoder
     source: CardSource
     syncer: Syncer
+    retriever: HybridRetriever
+    intent_classifier: IntentClassifier
 
     encoder_ready: bool = False
     index_ready: bool = False
@@ -77,7 +82,7 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
 
     card_repo = CardRepo(db)
     sync_state_repo = SyncStateRepo(db)
-    index = VectorIndex(settings.ai_embedding_dim)
+    index = SearchIndex(settings.ai_embedding_dim)
     encoder = encoder or Encoder(settings)
     source = build_source(settings)
 
@@ -98,6 +103,14 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
             encoder=encoder,
             settings=settings,
         ),
+        retriever=HybridRetriever(
+            index,
+            rrf_k=settings.ai_rrf_k,
+            lexical_candidates=settings.ai_lexical_candidates,
+            semantic_candidates=settings.ai_semantic_candidates,
+            min_score=settings.ai_min_score,
+        ),
+        intent_classifier=IntentClassifier(encoder, min_margin=settings.ai_intent_min_margin),
     )
 
 
@@ -111,7 +124,7 @@ async def load_index_from_db(service: Service) -> None:
 
     started = time.perf_counter()
 
-    rows = await service.card_repo.load_index_rows()
+    rows = await service.card_repo.load_all()
     service.index.rebuild(rows)
     service.index_ready = True
 
@@ -130,6 +143,9 @@ async def warmup(service: Service) -> None:
             await service.encoder.load()
 
         service.encoder_ready = True
+
+        # Embed câu mẫu intent một lần, rồi giữ centroid suốt vòng đời.
+        await service.intent_classifier.warmup()
 
         await load_index_from_db(service)
 
@@ -193,6 +209,7 @@ def create_app(settings: Settings | None = None, encoder: Encoder | None = None)
 
     register_exception_handlers(app)
     app.include_router(index_api.router)
+    app.include_router(search_api.router)
 
     @app.get("/healthz", tags=["Health"])
     async def healthz() -> dict:

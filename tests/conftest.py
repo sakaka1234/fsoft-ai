@@ -147,3 +147,12 @@ async def synced_service(service: Service) -> Service:
     await load_index_from_db(service)
 
     return service
+
+
+@pytest.fixture
+async def retrieval_service(synced_service: Service) -> Service:
+    """Như `synced_service`, cộng thêm centroid intent đã warmup."""
+
+    await synced_service.intent_classifier.warmup()
+
+    return synced_service

@@ -59,6 +59,4 @@ _FIELD_MAP = {
 def parse_source_card(raw: dict) -> SourceCard:
     """Một phần tử trong `data.content` của backend -> `SourceCard`."""
 
-    return SourceCard.model_validate(
-        {snake: raw.get(camel) for camel, snake in _FIELD_MAP.items()}
-    )
+    return SourceCard.model_validate({snake: raw.get(camel) for camel, snake in _FIELD_MAP.items()})

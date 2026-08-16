@@ -49,3 +49,17 @@ class IndexRow:
     deck_id: int
     word: str
     vector: np.ndarray
+
+
+@dataclass(slots=True)
+class StoredCard:
+    """
+    Một thẻ đã embed, đọc lên từ SQLite.
+
+    Đường nóng (retrieval, chat, quiz) đọc hoàn toàn từ RAM, không chạm SQLite
+    (SPEC muc 5.3), nên `SearchIndex` phải giữ đủ text để dựng phản hồi và
+    dựng ngữ cảnh cho prompt — không chỉ vector.
+    """
+
+    card: SourceCard
+    vector: np.ndarray

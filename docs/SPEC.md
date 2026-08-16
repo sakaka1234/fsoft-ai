@@ -1233,11 +1233,19 @@ Kết quả: `docs/M0_FINDINGS.md`.
 
 **Hợp nhất bằng RRF:** `score(d) = Σ 1/(60 + rank_i(d))`. Kết quả tầng 1 luôn ghim lên rank 1.
 
+**Cổng lọc liên quan.** Sau tầng 3, loại ứng viên có cosine dưới `AI_MIN_SCORE`. Không có cổng này thì **mọi** câu hỏi đều trả về đúng `top_k` thẻ, kể cả khi bộ thẻ hoàn toàn không chứa câu trả lời — hỏi `deforestation` trong bộ TOEIC sẽ nhận 5 từ ngẫu nhiên. Không tầng nào còn ứng viên → trả rỗng, và M4 dựa vào đó để nói "chưa có trong bộ thẻ".
+
+> Giá trị `0.35` ở bản v3 là phỏng đoán và **không lọc được gì** — E5 nén điểm vào dải 0.80–0.95. Số thật hiệu chỉnh trên 40 case là **0.83**. Lưu ý hai phân bố **chồng lấn** (positive thấp nhất 0.8277, negative cao nhất 0.8297) nên không ngưỡng nào tách sạch được; 0.83 đổi một positive yếu lấy cả năm case NEGATIVE.
+
 **2. `app/retrieval/intent.py` — không gọi LLM:**
 
-- Bước 1: rule regex tiếng Việt và tiếng Anh (`nghĩa là gì`, `đặt câu`, `ví dụ`, `ngữ pháp`, `thì`, `dịch`, `tạo quiz`, `xin chào`...).
-- Bước 2: nếu rule không quyết được, so cosine giữa embedding câu hỏi và **centroid của các câu mẫu đã embed sẵn** cho từng intent. Mỗi intent 10–15 câu mẫu trong `intent_examples.py`, embed lúc khởi động. Cao nhất dưới 0.50 → `OUT_OF_SCOPE`.
+- Bước 1: rule regex tiếng Việt và tiếng Anh (`nghĩa là gì`, `đặt câu`, `ví dụ`, `ngữ pháp`, `thì`, `dịch`, `tạo quiz`, `xin chào`...). Bắt được khoảng 55% lưu lượng, dừng luôn.
+- Bước 2: nếu rule không quyết được, so cosine giữa embedding câu hỏi và **centroid của các câu mẫu đã embed sẵn** cho từng intent. Mỗi intent 10–15 câu mẫu trong `intent_examples.py`, embed lúc khởi động.
 - Câu hỏi đã được embed cho retrieval rồi, nên phân loại thêm **tốn 0 token và gần 0ms**.
+
+> ⚠️ **Sửa so với bản v3: `OUT_OF_SCOPE` là một LỚP THẬT có câu mẫu riêng, quyết định bằng argmax, KHÔNG phải "cái còn lại khi điểm dưới 0.50".**
+>
+> M0 đo được hai câu hỏi hoàn toàn không liên quan vẫn đạt cosine ~0.85 khi cùng mang prefix `query: ` (`docs/M0_FINDINGS.md` mục 2.5), nên ngưỡng tuyệt đối 0.50 không bao giờ kích hoạt. So sánh **tương đối** giữa các lớp thì miễn nhiễm với chuyện đó. `AI_INTENT_MIN_MARGIN` chỉ dùng cho biên độ giữa hạng nhất và hạng nhì; biên độ quá mỏng thì nghiêng về `VOCAB_LOOKUP`, vì đoán nhầm thành tra từ chỉ tốn một lần retrieval miễn phí, còn đoán nhầm thành `OUT_OF_SCOPE` là từ chối trả lời người dùng.
 
 **3. `app/retrieval/context.py`** — serialize gọn, **không** dump JSON đầy đủ:
 
@@ -1575,8 +1583,9 @@ AI_TOP_K=3
 AI_LEXICAL_CANDIDATES=20
 AI_SEMANTIC_CANDIDATES=20
 AI_RRF_K=60
-AI_MIN_SCORE=0.35
-AI_INTENT_THRESHOLD=0.50
+AI_MIN_SCORE=0.83                         # HIỆU CHỈNH Ở M2, không phải 0.35
+AI_INTENT_THRESHOLD=0.50                  # không dùng như ngưỡng tuyệt đối
+AI_INTENT_MIN_MARGIN=0.01                 # biên độ hạng nhất so với hạng nhì
 
 # ---- LLM ----
 AI_LLM_BASE_URL=https://api.groq.com/openai/v1

@@ -163,6 +163,21 @@ class Encoder:
 
         return np.asarray(vector, dtype=np.float32)
 
+    def embed_queries_sync(self, texts: list[str]) -> list[np.ndarray]:
+        """Embed nhiều câu hỏi theo lô — dùng lúc warmup centroid intent."""
+
+        if not texts:
+            return []
+
+        model = self._require_model()
+
+        prefixed = [self._query_prefix + text for text in texts]
+
+        return [
+            np.asarray(vector, dtype=np.float32)
+            for vector in model.embed(prefixed, batch_size=self._batch_size)
+        ]
+
     def embed_passages_sync(self, texts: list[str]) -> list[np.ndarray]:
         if not texts:
             return []
@@ -183,6 +198,9 @@ class Encoder:
         """
 
         return await anyio.to_thread.run_sync(self.embed_query_sync, text)
+
+    async def embed_queries(self, texts: list[str]) -> list[np.ndarray]:
+        return await anyio.to_thread.run_sync(self.embed_queries_sync, texts)
 
     async def embed_passages(self, texts: list[str]) -> list[np.ndarray]:
         return await anyio.to_thread.run_sync(self.embed_passages_sync, texts)

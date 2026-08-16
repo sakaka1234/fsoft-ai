@@ -71,8 +71,14 @@ class Settings(BaseSettings):
     ai_lexical_candidates: int = 20
     ai_semantic_candidates: int = 20
     ai_rrf_k: int = 60
-    ai_min_score: float = 0.35
+    # Cổng lọc liên quan trên điểm cosine của tầng semantic. Hiệu chỉnh từ số
+    # đo thật trên bộ 40 case, KHÔNG phải con số 0.35 phỏng đoán ban đầu —
+    # E5 nén điểm vào dải 0.80-0.95 nên 0.35 không lọc được gì.
+    ai_min_score: float = 0.83
     ai_intent_threshold: float = 0.50
+    # Biên độ tối thiểu giữa hạng nhất và hạng nhì khi phân loại intent bằng
+    # centroid. KHÔNG phải ngưỡng tuyệt đối — xem docs/M0_FINDINGS.md muc 2.5.
+    ai_intent_min_margin: float = 0.01
 
     # ---- LLM (M3) ----
     ai_llm_base_url: str = "https://api.groq.com/openai/v1"

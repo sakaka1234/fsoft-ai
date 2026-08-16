@@ -20,8 +20,8 @@ from app.config import Settings
 from app.core.logging import get_logger
 from app.embedding.encoder import Encoder
 from app.embedding.text_builder import build_text_and_hash
-from app.embedding.vector_index import VectorIndex
-from app.schemas.card import CardToStore, IndexRow, SourceCard
+from app.retrieval.search_index import SearchIndex
+from app.schemas.card import CardToStore, SourceCard, StoredCard
 from app.store.card_repo import CardFingerprint, CardRepo
 from app.store.sync_state_repo import (
     KEY_LAST_FULL_SWEEP_AT,
@@ -66,7 +66,7 @@ class Syncer:
         source: CardSource,
         card_repo: CardRepo,
         sync_state_repo: SyncStateRepo,
-        index: VectorIndex,
+        index: SearchIndex,
         encoder: Encoder,
         settings: Settings,
     ) -> None:
@@ -249,17 +249,7 @@ class Syncer:
 
         await self._cards.upsert_many(to_store)
 
-        self._index.upsert(
-            [
-                IndexRow(
-                    card_id=item.source.card_id,
-                    deck_id=item.source.deck_id,
-                    word=item.source.word,
-                    vector=item.vector,
-                )
-                for item in to_store
-            ]
-        )
+        self._index.upsert([StoredCard(card=item.source, vector=item.vector) for item in to_store])
 
         for item in to_store:
             fingerprints[item.source.card_id] = CardFingerprint(
