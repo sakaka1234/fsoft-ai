@@ -86,8 +86,56 @@ def test_token_dung_tien_to_van_bi_tu_choi(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+def test_token_co_dau_tieng_viet_thi_401_chu_khong_phai_500(client: TestClient) -> None:
+    """
+    `secrets.compare_digest` ném `TypeError: comparing strings with non-ASCII
+    characters is not supported`.
+
+    Header HTTP được decode theo latin-1 nên ký tự ngoài ASCII lọt vào được
+    thật. Nếu so trên `str`, một client gõ nhầm token có dấu sẽ làm endpoint trả
+    500 — vừa sai ngữ nghĩa, vừa biến một request rác thành sự cố phía server.
+    So trên bytes thì hết.
+
+    Gửi dưới dạng BYTES vì thư viện client từ chối encode chuỗi ngoài ASCII —
+    nhưng trên đường dây thì header vốn chỉ là byte, và Starlette decode chúng
+    theo latin-1. Đây đúng là thứ tới được `require_internal_token`.
+    """
+
+    for token_rac in ("café", "münchen", "naïve"):
+        response = client.get(
+            "/internal/v1/index/status",
+            headers={"X-Internal-Token": token_rac.encode("latin-1")},
+        )
+
+        assert response.status_code == 401, f"{token_rac!r} cho ra {response.status_code}"
+        assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
 def test_token_dung_thi_200(client: TestClient) -> None:
     assert client.get("/internal/v1/index/status", headers=HEADERS).status_code == 200
+
+
+def test_swagger_khai_bao_security_scheme_de_co_nut_authorize(client: TestClient) -> None:
+    """
+    Khai báo `APIKeyHeader` thay vì `Header()` thường không đổi hành vi runtime,
+    nhưng đổi hẳn trải nghiệm test: có nút Authorize thì dán token một lần dùng
+    cho mọi endpoint, thay vì gõ lại header ở từng ô "Try it out".
+
+    Dễ bị hỏng âm thầm khi ai đó "dọn dẹp" `deps.py` về `Header()`, nên khoá lại.
+    """
+
+    spec = client.get("/openapi.json").json()
+
+    schemes = spec["components"]["securitySchemes"]
+
+    assert "X-Internal-Token" in schemes
+    assert schemes["X-Internal-Token"]["type"] == "apiKey"
+    assert schemes["X-Internal-Token"]["in"] == "header"
+    assert schemes["X-Internal-Token"]["name"] == "X-Internal-Token"
+
+    # Endpoint nội bộ phải yêu cầu scheme đó; /healthz thì không.
+    assert spec["paths"]["/internal/v1/search"]["post"]["security"]
+    assert "security" not in spec["paths"]["/healthz"]["get"]
 
 
 def test_loi_khong_bao_gio_lo_traceback(client: TestClient) -> None:
