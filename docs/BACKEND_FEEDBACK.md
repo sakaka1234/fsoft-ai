@@ -38,9 +38,11 @@ Chạy nguyên service vào backend thật: đồng bộ **39/39 thẻ**, `last_
 
 ---
 
-## 2. Cần chốt bằng văn bản: phân trang đang là 1-based
+## 2. Phân trang 1-based — đúng hợp đồng, chỉ ghi chú rủi ro
 
-Đây không phải lỗi, nhưng là chỗ **dễ hỏng âm thầm nhất** về sau.
+**Các bạn làm đúng, không cần sửa gì.** SPEC mục 3.3 đã chốt sẵn: *"Endpoint nội bộ
+mới và module AI ở M6 chốt dùng kiểu deck: `page`/`size` phẳng, 1-based"*. Mình ghi lại
+đây chỉ để cảnh báo một rủi ro về sau.
 
 ```
 gửi page=0   ->  [1, 2, 3]     <- trùng y hệt page=1
@@ -52,19 +54,21 @@ gửi page=14  ->  []           last=true
 
 Nghĩa là `offset = (page - 1) * size`, và `page=0` bị kẹp về trang 1.
 
-Client fsoft-ai hiện bắt đầu từ `page=1` nên **đang chạy đúng**. Nhưng Spring
-`Pageable` mặc định là **0-based**, nên nếu sau này có ai đó "sửa lại cho chuẩn Spring",
-fsoft-ai sẽ **âm thầm bỏ mất trang đầu tiên**: không có exception, không có log lỗi,
-chỉ là thiếu thẻ trong chỉ mục và người học không tìm thấy từ.
+Client fsoft-ai bắt đầu từ `page=1` nên khớp. Rủi ro nằm ở chỗ SPEC mục 3.3 cũng ghi
+rằng codebase hiện có **hai kiểu phân trang lệch nhau**: Deck dùng `page`/`size` phẳng
+1-based, còn Card dùng object `Pageable` 0-based. Endpoint nội bộ này nằm trong nhóm
+Card nhưng lại theo quy ước của Deck.
 
-**Đề nghị chọn một trong hai, rồi ghi vào tài liệu API:**
+Nghĩa là nếu sau này có ai đó thấy "endpoint card mà lại 1-based" rồi sửa cho đồng bộ
+với phần Card còn lại, fsoft-ai sẽ **âm thầm bỏ mất trang đầu tiên**: không exception,
+không log lỗi, chỉ là thiếu thẻ trong chỉ mục và người học không tra được từ.
 
-- **Giữ 1-based** (không cần sửa gì) — chỉ cần ghi rõ vào docs và thêm test khoá lại.
-- **Đổi sang 0-based** cho đúng chuẩn Spring — **báo mình trước**, mình sẽ đổi `page`
-  khởi tạo trong `http_source.py`.
+**Đề nghị hai việc nhỏ:**
 
-Nếu chọn cách nào cũng nên bỏ luôn việc kẹp `page=0` về trang 1: cứ để `page=0` trả về
-đúng trang tương ứng theo quy ước đã chọn, để lỗi lộ ra ngay thay vì lặng lẽ trả trùng.
+- Thêm comment ngay trên `InternalCardController` giải thích vì sao endpoint này cố ý
+  1-based dù nằm trong nhóm Card, kèm một test khoá lại `page=1` trả về phần tử đầu.
+- Cân nhắc bỏ việc kẹp `page=0` về trang 1. Hiện `page=0` và `page=1` trả về **y hệt
+  nhau**; để `page=0` báo `400` sẽ khiến lỗi lộ ra ngay thay vì lặng lẽ trả trùng.
 
 ---
 
@@ -179,7 +183,7 @@ sau:    từ nào nói về gia đình  ->  grandparent, grandparent, sibling
 
 | # | Việc | Ai làm |
 |---|---|---|
-| 1 | Chốt phân trang 1-based hay 0-based, ghi vào tài liệu API | BE |
+| 1 | Comment + test khoá lại quy ước 1-based cho endpoint nội bộ | BE |
 | 2 | Xác nhận hai endpoint có trả về deck PRIVATE không | BE |
 | 3 | Cho biết deck 9 / 14 trùng là dữ liệu rác hay tính năng nhân bản | BE |
 | 4 | Kế hoạch cho `audioUrl` — có sinh audio không, hay bỏ dạng quiz LISTENING | BE + PM |
