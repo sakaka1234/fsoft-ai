@@ -8,8 +8,9 @@ Chỉ gọi `GET`, không ghi, không đụng dữ liệu.
 > Ghi chú: `localhost:8080` lúc mình test không chạy nên mình bắn vào bản Railway. Cùng
 > token, cùng kết quả với ảnh Postman các bạn gửi.
 
-**Tóm tắt: hợp đồng API các bạn làm đúng hết. Không cần sửa code.** Có 1 điểm cần chốt
-lại bằng văn bản và 5 vấn đề về **dữ liệu** đang chặn tính năng.
+**Tóm tắt: hợp đồng API các bạn làm đúng hết. Không cần sửa code.** Vấn đề còn lại nằm ở
+**dữ liệu** chứ không ở API: 5 điểm, trong đó `audioUrl` null toàn bộ đang chặn hẳn một
+dạng quiz.
 
 ---
 
@@ -72,20 +73,12 @@ không log lỗi, chỉ là thiếu thẻ trong chỉ mục và người học k
 
 ---
 
-## 3. Câu hỏi quan trọng: deck PRIVATE có nằm trong kết quả không?
+## 3. Các deck ID bị khuyết — đã có lời giải, không cần làm gì
 
-Dữ liệu hiện có 8 deck: `4, 7, 9, 10, 11, 12, 14, 15`. Thiếu `1, 2, 3, 5, 6, 8, 13`.
+Dữ liệu hiện có 8 deck: `4, 7, 9, 10, 11, 12, 14, 15`, khuyết `1, 2, 3, 5, 6, 8, 13`.
 
-Mình cần biết những deck còn thiếu đó **không tồn tại**, hay **tồn tại nhưng bị lọc ra
-vì là PRIVATE**.
-
-Nếu là trường hợp thứ hai thì đây là lỗi nghiêm trọng nhưng hoàn toàn im lặng: người
-học sẽ không tra được chính bộ thẻ riêng của mình, và không có thông báo lỗi nào cả.
-
-**Hai endpoint này phải trả về CẢ deck PRIVATE.** Việc giới hạn phạm vi là do
-`allowed_deck_ids` mà tầng gọi truyền vào lúc chat/search/quiz quyết định, không phải
-do backend lọc sẵn. Nói cách khác: hai endpoint đồng bộ chỉ có nhiệm vụ đưa **toàn bộ**
-thẻ sang, phần phân quyền nằm ở chỗ khác.
+Đã xác nhận: **những deck đó đã bị xoá**, không phải bị lọc mất. Ghi lại đây để lần sau
+ai nhìn vào danh sách ID không liên tục cũng không phải đi điều tra lại.
 
 ---
 
@@ -184,12 +177,11 @@ sau:    từ nào nói về gia đình  ->  grandparent, grandparent, sibling
 | # | Việc | Ai làm |
 |---|---|---|
 | 1 | Comment + test khoá lại quy ước 1-based cho endpoint nội bộ | BE |
-| 2 | Xác nhận hai endpoint có trả về deck PRIVATE không | BE |
-| 3 | Cho biết deck 9 / 14 trùng là dữ liệu rác hay tính năng nhân bản | BE |
-| 4 | Kế hoạch cho `audioUrl` — có sinh audio không, hay bỏ dạng quiz LISTENING | BE + PM |
-| 5 | Bổ sung `definitionEn` / `exampleSentence` cho thẻ seed | BE |
-| 6 | Thống nhất bộ giá trị `partOfSpeech` | BE |
-| 7 | Frontend hiển thị message 400 khi deck dưới 4 thẻ | FE |
+| 2 | Cho biết deck 9 / 14 trùng là dữ liệu rác hay tính năng nhân bản | BE |
+| 3 | Kế hoạch cho `audioUrl` — có sinh audio không, hay bỏ dạng quiz LISTENING | BE + PM |
+| 4 | Bổ sung `definitionEn` / `exampleSentence` cho thẻ seed | BE |
+| 5 | Thống nhất bộ giá trị `partOfSpeech` | BE |
+| 6 | Frontend hiển thị message 400 khi deck dưới 4 thẻ | FE |
 
 Chi tiết cách gọi ba endpoint chat / search / quiz nằm ở
 [BACKEND_INTEGRATION.md](BACKEND_INTEGRATION.md).
