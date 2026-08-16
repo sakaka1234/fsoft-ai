@@ -186,6 +186,32 @@ class VectorIndex:
 
             return [(int(self._card_ids[rows[i]]), float(scores[i])) for i in top]
 
+    def vector_of(self, card_id: int) -> np.ndarray | None:
+        with self._lock:
+            row = self._row_of.get(card_id)
+
+            return None if row is None else self._matrix[row].copy()
+
+    def neighbors(
+        self, card_id: int, allowed_deck_ids: list[int], top_k: int
+    ) -> list[tuple[int, float]]:
+        """
+        Láng giềng gần nhất theo embedding, KHÔNG tính chính nó.
+
+        Đây là ứng dụng đắt giá thứ hai của embedding sau retrieval: nhiễu quiz
+        chọn theo láng giềng vừa đủ giống để khó, vừa đủ khác để không mơ hồ
+        (SPEC muc 11.6).
+        """
+
+        vector = self.vector_of(card_id)
+
+        if vector is None:
+            return []
+
+        found = self.search(vector, allowed_deck_ids, top_k + 1)
+
+        return [(cid, score) for cid, score in found if cid != card_id][:top_k]
+
     def lookup_word(self, word: str, allowed_deck_ids: list[int]) -> list[int]:
         """Tầng khớp chính xác của M2. Trả card_id trong phạm vi cho phép."""
 

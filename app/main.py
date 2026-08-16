@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1 import chat as chat_api
 from app.api.v1 import index as index_api
+from app.api.v1 import quiz as quiz_api
 from app.api.v1 import search as search_api
 from app.chat.orchestrator import ChatOrchestrator
 from app.chat.semantic_cache import SemanticCache
@@ -27,6 +28,7 @@ from app.embedding.encoder import Encoder
 from app.llm.budget import TokenBudget
 from app.llm.client import LlmClient
 from app.llm.registry import PromptRegistry
+from app.quiz.generator import QuizGenerator
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.intent import IntentClassifier
 from app.retrieval.search_index import SearchIndex
@@ -62,6 +64,7 @@ class Service:
     llm: LlmClient
     cache: SemanticCache
     orchestrator: ChatOrchestrator
+    quiz: QuizGenerator
 
     encoder_ready: bool = False
     index_ready: bool = False
@@ -152,6 +155,7 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
             prompts=prompts,
             cache=cache,
         ),
+        quiz=QuizGenerator(settings=settings, index=index, llm=llm, prompts=prompts),
     )
 
 
@@ -254,6 +258,7 @@ def create_app(settings: Settings | None = None, encoder: Encoder | None = None)
     app.include_router(index_api.router)
     app.include_router(search_api.router)
     app.include_router(chat_api.router)
+    app.include_router(quiz_api.router)
 
     @app.get("/healthz", tags=["Health"])
     async def healthz() -> dict:

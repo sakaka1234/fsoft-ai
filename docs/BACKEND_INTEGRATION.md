@@ -3,9 +3,8 @@
 > **Đối tượng:** đội backend Java (Spring Boot).
 > **Bạn không cần đọc `SPEC.md`.** Tài liệu này tự chứa mọi thứ để tích hợp.
 >
-> **Trạng thái ngày 16/08/2026:** M1 đã xong. Mục [5](#5-fsoft-ai-cung-cấp-gì) nói rõ
-> endpoint nào **gọi được ngay**, endpoint nào **chưa tồn tại** — đừng viết client cho
-> những cái chưa có.
+> **Trạng thái ngày 16/08/2026: M1 đến M5 đã xong.** Chat, tìm kiếm ngữ nghĩa và sinh
+> quiz đều gọi được. Mục [5](#5-fsoft-ai-cung-cấp-gì) là danh sách đầy đủ.
 
 ---
 
@@ -318,21 +317,97 @@ Ba field đáng theo dõi khi ghép hệ thống:
 Sau khi deploy lần đầu, gọi `POST /internal/v1/index/sync?sweep=true&full=true` rồi theo dõi
 `card_count` cho tới khi khớp số thẻ thật.
 
-### 5.2 ⛔ Chưa tồn tại — đừng viết client vội
+### 5.2 Endpoint nghiệp vụ
 
-Các endpoint dưới đây đã có đặc tả trong `SPEC.md` nhưng **chưa được implement**. Gọi vào
-sẽ nhận `404`.
-
-| Đường dẫn | Milestone | Dự kiến |
+| Method | Đường dẫn | Tốn token LLM? |
 |---|---|---|
-| `POST /internal/v1/search` | M2 | Tìm kiếm ngữ nghĩa, **không tốn token LLM** |
-| `POST /internal/v1/chat` | M4 | Hỏi đáp RAG, blocking |
-| `POST /internal/v1/chat/stream` | M4 | Hỏi đáp RAG, SSE |
-| `POST /internal/v1/quiz/generate` | M5 | Sinh câu hỏi kiểm tra |
-| `GET /internal/v1/stats` | M7 | Thống kê token và độ trễ |
+| `POST` | `/internal/v1/search` | **Không bao giờ** |
+| `POST` | `/internal/v1/chat` | Chỉ khi cần — xem bảng dưới |
+| `POST` | `/internal/v1/chat/stream` | Chỉ khi cần, SSE |
+| `POST` | `/internal/v1/quiz/generate` | Chỉ dạng `FILL_BLANK` |
 
-Đội AI sẽ cập nhật tài liệu này khi từng cái xong. Trong lúc chờ, việc số 1 và số 2 ở
-[mục 1](#1-ba-việc-backend-cần-làm) đã đủ để làm song song.
+**`POST /internal/v1/search`** — tìm kiếm ngữ nghĩa, miễn phí hoàn toàn, khoảng 11ms.
+Nên gắn thẳng vào giao diện dưới dạng "tìm kiếm thông minh".
+
+```json
+{ "query": "từ nào chỉ cảm giác lo lắng", "allowed_deck_ids": [1], "top_k": 3 }
+```
+```json
+{ "results": [
+    { "card_id": 102, "word": "apprehensive", "meaning": "lo lắng, e ngại về điều sắp xảy ra",
+      "deck_id": 1, "deck_title": "TOEIC - Cảm xúc & Tính cách",
+      "score": 0.0328, "match_type": "HYBRID" } ],
+  "latency_ms": 11, "candidate_count": 3 }
+```
+
+Không có thẻ nào đủ liên quan thì `results` **rỗng** — đó là câu trả lời đúng, không
+phải lỗi. Đừng hiển thị thẻ ngẫu nhiên thay thế.
+
+**`POST /internal/v1/chat`**
+
+```json
+{ "query": "cho tôi ví dụ với từ này",
+  "allowed_deck_ids": [1, 2, 4],
+  "scope_deck_id": 1,
+  "history": [{ "role": "user", "content": "resilient nghĩa là gì?" }],
+  "options": { "top_k": 3, "max_output_tokens": 400 } }
+```
+
+`history` backend cắt sẵn, tối đa 6 phần tử. Phản hồi có `answer`, `intent`,
+`answer_source`, `rewritten_query`, `citations`, `usage`.
+
+`answer_source` cho biết câu trả lời đến từ đâu, và **ba trong năm giá trị là miễn phí**:
+
+| `answer_source` | Token | Khi nào |
+|---|---|---|
+| `DIRECT_LOOKUP` | **0** | Tra từ khớp chính xác, câu hỏi đơn giản — dựng thẳng từ thẻ |
+| `CANNED` | **0** | Chào hỏi hoặc câu ngoài chủ đề học tiếng Anh |
+| `CACHE` | **0** | Câu hỏi tương tự đã hỏi trước đó, cùng phạm vi |
+| `RAG` | có | Trả lời dựa trên thẻ tìm được |
+| `LLM_ONLY` | có | Ngữ pháp, dịch — không cần thẻ nào |
+
+**`POST /internal/v1/chat/stream`** — SSE, thứ tự sự kiện cố định:
+
+```
+event: meta          {"intent":"...","answer_source":"...","rewritten_query":null}
+event: citations     [{"card_id":101,...}]
+event: token         {"t":"Trong"}
+event: done          {"usage":{...}}
+event: error         {"code":"...","message":"..."}
+```
+
+`citations` **luôn** đến trước token đầu tiên. Khi proxy ra frontend phải **giữ nguyên
+tên sự kiện và thứ tự**.
+
+**`POST /internal/v1/quiz/generate`**
+
+```json
+{ "deck_id": 1, "allowed_deck_ids": [1, 2, 4], "question_count": 8,
+  "types": ["MULTIPLE_CHOICE", "FILL_BLANK", "LISTENING", "MATCHING"],
+  "card_ids": [101, 102], "use_ai_context": true }
+```
+
+`card_ids` do backend chọn theo thẻ đến hạn ôn SRS — **fsoft-ai không biết gì về SRS**.
+Bỏ trống thì tự lấy trong deck.
+
+| Dạng | Cần LLM? | Trường riêng |
+|---|:---:|---|
+| `MULTIPLE_CHOICE` | không | `options`, `correct_index` |
+| `LISTENING` | không | thêm `audio_url` |
+| `MATCHING` | không | thêm `matching`, không có `correct_index` |
+| `FILL_BLANK` | **có** | đề bài chứa `______` |
+
+> ⚠️ **`use_ai_context: false` là chế độ dự phòng cho ngày bảo vệ.** Sinh 100% không
+> chạm Groq, dưới 2 giây, không thể bị rate limit. Nếu Groq nghẽn thì bật cờ này.
+
+Thẻ không có `audio_url` sẽ không sinh được dạng `LISTENING` — hệ thống tự lùi về
+`MULTIPLE_CHOICE` thay vì bỏ trống câu hỏi.
+
+### 5.3 ⛔ Chưa tồn tại
+
+| Đường dẫn | Milestone |
+|---|---|
+| `GET /internal/v1/stats` | M7 — thống kê token, độ trễ, phân bố `answer_source` |
 
 ---
 
@@ -425,6 +500,26 @@ AI_BACKEND_TOKEN=<TOKEN_B>
 - [ ] TOKEN_A và TOKEN_B là **hai giá trị khác nhau**
 - [ ] Sau deploy: `POST /internal/v1/index/sync?full=true&sweep=true`, theo dõi `card_count`
       cho tới khi khớp số thẻ thật
+
+---
+
+## 9. Hạn chế đã biết
+
+**Câu hỏi tiếng Việt viết không dấu trả về rỗng.**
+
+| Câu hỏi | Có dấu | Không dấu |
+|---|---|---|
+| `resilient nghĩa là gì` | ✅ tìm thấy 101 | ✅ tìm thấy 101 |
+| `từ nào chỉ cảm giác lo lắng` | ✅ 102, 108 | ❌ **rỗng** |
+| `từ nào nói về hạn chót công việc` | ✅ 201 | ❌ **rỗng** |
+
+Câu chứa từ tiếng Anh vẫn chạy nhờ tầng khớp chính xác. Nhưng câu hỏi thuần tiếng Việt
+không dấu thì model embedding coi như một chuỗi khác hẳn, và không thẻ nào vượt được
+cổng lọc liên quan.
+
+Người Việt gõ không dấu rất phổ biến, nhất là trên điện thoại. **Gợi ý cho frontend:**
+nhắc người dùng gõ có dấu, hoặc bật bộ thêm dấu tự động ở ô nhập. Phía fsoft-ai sẽ xử lý
+triệt để ở M7 nếu còn thời gian.
 
 ---
 

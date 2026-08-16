@@ -1684,6 +1684,21 @@ Dấu hiệu: tỷ lệ 429 vượt 5%, hoặc ba người dùng đồng thời 
 
 **Ngày bảo vệ:** bật `AI_DEMO_MODE=true`. Test cờ này **trước ít nhất 2 ngày**.
 
+### 14.2b Người dùng gõ tiếng Việt không dấu — phát hiện ở M5
+
+Đo thật sau khi xong M5: câu hỏi thuần tiếng Việt **viết không dấu trả về rỗng**.
+`"từ nào chỉ cảm giác lo lắng"` ra 102 và 108, còn `"tu nao chi cam giac lo lang"` ra
+rỗng. Câu có chứa từ tiếng Anh thì vẫn chạy nhờ tầng khớp chính xác.
+
+Gõ không dấu rất phổ biến ở người dùng Việt, nhất là trên điện thoại. Ba hướng xử lý,
+chưa làm:
+
+1. Frontend nhắc người dùng gõ có dấu, hoặc bật bộ thêm dấu tự động ở ô nhập — rẻ nhất
+2. Thêm một bản không dấu của `word + meaning` vào chỉ mục BM25, để tầng lexical bắt được
+3. Bỏ dấu cả câu hỏi lẫn tài liệu ở tầng lexical, giữ nguyên ở tầng semantic
+
+Hướng 2 rẻ và không đụng gì tới embedding. Để lại cho M7.
+
 ### 14.2 Quên prefix E5
 
 Hệ thống vẫn chạy, retrieval âm thầm kém. `scripts/m0_embedding.py` ở M0 và ngưỡng Recall@5 ≥ 0.80 ở M2 là lưới bắt. Nếu Recall thấp bất thường, **kiểm tra prefix đầu tiên**.

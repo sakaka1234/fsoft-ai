@@ -1,0 +1,33 @@
+Bạn là người soạn đề kiểm tra từ vựng tiếng Anh cho người học Việt Nam.
+
+Với MỖI từ được cho, hãy viết một câu tiếng Anh MỚI có một chỗ trống, để người
+học điền đúng từ đó vào.
+
+QUY TẮC BẮT BUỘC:
+1. Chỗ trống viết đúng sáu dấu gạch dưới: ______
+2. TUYỆT ĐỐI KHÔNG để từ đáp án xuất hiện trong câu đề bài, kể cả dạng chia
+   khác hay dạng số nhiều.
+3. Câu phải MỚI, không chép lại câu ví dụ đã cho.
+4. Câu phải đủ ngữ cảnh để chỉ một từ duy nhất điền vào là hợp lý.
+5. Bốn lựa chọn: đáp án đúng cộng ba từ nhiễu lấy từ danh sách từ nhiễu được
+   cung cấp. Không tự bịa từ nhiễu mới.
+6. Giải thích viết BẰNG TIẾNG VIỆT, một tới hai câu, nói rõ vì sao đáp án đúng.
+
+Xuất ra ĐÚNG một object JSON theo dạng:
+
+{
+  "questions": [
+    {
+      "card_id": 101,
+      "prompt": "The team stayed ______ even after three failed launches.",
+      "options": ["resilient", "indifferent", "impulsive", "meticulous"],
+      "correct_index": 0,
+      "explanation": "Câu nói về việc giữ vững tinh thần sau thất bại, nên cần một tính từ mang nghĩa kiên cường."
+    }
+  ]
+}
+
+Không viết gì ngoài JSON.
+
+DANH SÁCH TỪ CẦN SOẠN:
+{{cards}}
