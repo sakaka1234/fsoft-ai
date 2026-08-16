@@ -1,10 +1,15 @@
 """Test retrieval lai và bộ đo. Acceptance SPEC muc 11.3."""
 
+from datetime import UTC, datetime
+
+import numpy as np
 import pytest
 
 from app.config import PROJECT_ROOT
 from app.main import Service
 from app.retrieval.hybrid import extract_english_tokens, reciprocal_rank_fusion
+from app.retrieval.search_index import SearchIndex
+from app.schemas.card import SourceCard, StoredCard
 from app.schemas.chat import MatchType
 from tests.eval.metrics import CaseOutcome, EvalReport, load_golden
 
@@ -216,3 +221,46 @@ def test_tach_token_tieng_anh_bo_qua_tu_viet_khong_dau() -> None:
     assert extract_english_tokens("khí thải tiếng anh là gì") == []
     assert extract_english_tokens("resilient nghĩa là gì") == ["resilient"]
     assert extract_english_tokens("what does redundant mean") == ["redundant"]
+
+
+def _stored(card_id: int, deck_id: int, word: str, meaning: str, example: str = "") -> StoredCard:
+    return StoredCard(
+        card=SourceCard(
+            card_id=card_id,
+            deck_id=deck_id,
+            word=word,
+            meaning=meaning,
+            example_sentence=example or None,
+            source_updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        ),
+        vector=np.zeros(4, dtype="float32"),
+    )
+
+
+def test_bm25_khong_de_hu_tu_quyet_dinh_thu_hang() -> None:
+    """
+    Hồi quy từ dữ liệu thật của backend.
+
+    "từ" trong câu hỏi khớp với nghĩa "từ chức" của thẻ `resign`. Trong corpus
+    nhỏ, `resign` là thẻ DUY NHẤT chứa "từ" nên IDF của nó rất cao: câu hỏi về
+    gia đình trả về `resign` với 2.85 điểm trong khi mọi thẻ khác đều 0 điểm.
+    """
+
+    index = SearchIndex(dim=4)
+    index.rebuild(
+        [
+            _stored(18, 11, "resign", "từ chức", "He decided to resign from his position."),
+            _stored(3, 9, "mother", "mẹ", "She is a loving mother."),
+            _stored(5, 9, "sibling", "anh chị em ruột", "I have two siblings."),
+        ]
+    )
+
+    decks = [9, 11]
+
+    assert index.lexical_search("từ nào nói về gia đình", decks, top_k=5) == []
+
+    # Không được lọc tay quá đà: "resign" vẫn phải tra được như thường.
+    assert [cid for cid, _ in index.lexical_search("resign", decks, top_k=5)] == [18]
+
+    # Và "từ" vẫn nằm nguyên trong corpus, nên hỏi thẳng "từ chức" vẫn ra.
+    assert 18 in [cid for cid, _ in index.lexical_search("từ chức", decks, top_k=5)]

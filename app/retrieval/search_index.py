@@ -20,6 +20,7 @@ from rank_bm25 import BM25Okapi
 
 from app.core.logging import get_logger
 from app.embedding.vector_index import VectorIndex
+from app.retrieval.stopwords import strip_stopwords
 from app.schemas.card import IndexRow, SourceCard, StoredCard
 
 log = get_logger(__name__)
@@ -155,8 +156,13 @@ class SearchIndex:
         if not allowed_deck_ids or top_k <= 0:
             return []
 
-        tokens = tokenize(query)
+        # Bỏ hư từ khỏi câu hỏi, giữ nguyên corpus. Xem app/retrieval/stopwords.py:
+        # một hư từ hiếm gặp trong corpus nhỏ có IDF rất cao và một mình nó
+        # quyết định toàn bộ thứ hạng lexical.
+        tokens = strip_stopwords(tokenize(query))
 
+        # Câu hỏi toàn hư từ thì tầng lexical không có gì để nói. Trả rỗng để
+        # tầng semantic quyết định, thay vì bịa ra thứ hạng từ nhiễu.
         if not tokens:
             return []
 

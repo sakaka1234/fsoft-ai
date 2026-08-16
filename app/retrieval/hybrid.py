@@ -19,59 +19,18 @@ from dataclasses import dataclass
 import numpy as np
 
 from app.retrieval.search_index import SearchIndex
+from app.retrieval.stopwords import QUERY_STOPWORDS
 from app.schemas.card import SourceCard
 from app.schemas.chat import MatchType
 
 # Token tiếng Anh: chỉ chữ cái Latin không dấu, tối thiểu 2 ký tự.
 # Dùng để dò từ vựng tiếng Anh trong câu hỏi tiếng Việt.
+#
+# Bộ dò này không phân biệt được âm tiết tiếng Việt với từ tiếng Anh: "gia"
+# trong "gia đình" cũng lọt qua. Không sao, vì `lookup_word` chỉ trả về thẻ
+# khi `word` khớp tuyệt đối — âm tiết tiếng Việt đơn giản là không tra được
+# gì. Tầng BM25 mới là nơi chúng gây hại, và nó tự lọc hư từ riêng.
 _ENGLISH_TOKEN_RE = re.compile(r"\b[a-zA-Z]{2,}\b")
-
-# Từ tiếng Anh quá phổ biến, xuất hiện trong câu hỏi mà không phải từ cần tra.
-_STOPWORDS = {
-    # Từ tiếng Việt viết không dấu nên lọt qua bộ dò [a-zA-Z]. "anh" là ca
-    # nguy hiểm nhất: nó nằm trong "tiếng anh", xuất hiện ở MỌI câu hỏi tra
-    # từ kiểu "X tiếng anh là gì".
-    "anh",
-    "em",
-    "ta",
-    "ban",
-    "cho",
-    "khi",
-    "nao",
-    "la",
-    "gi",
-    "toi",
-    "cua",
-    "nghia",
-    "tu",
-    "hay",
-    "vao",
-    "trong",
-    "con",
-    "co",
-    "va",
-    "voi",
-    "what",
-    "does",
-    "mean",
-    "the",
-    "a",
-    "an",
-    "is",
-    "are",
-    "in",
-    "on",
-    "at",
-    "give",
-    "me",
-    "example",
-    "sentence",
-    "please",
-    "how",
-    "to",
-    "use",
-    "word",
-}
 
 
 @dataclass(slots=True)
@@ -88,7 +47,7 @@ def extract_english_tokens(query: str) -> list[str]:
     return [
         token.lower()
         for token in _ENGLISH_TOKEN_RE.findall(query)
-        if token.lower() not in _STOPWORDS
+        if token.lower() not in QUERY_STOPWORDS
     ]
 
 

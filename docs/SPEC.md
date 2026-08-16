@@ -1699,6 +1699,25 @@ chưa làm:
 
 Hướng 2 rẻ và không đụng gì tới embedding. Để lại cho M7.
 
+### 14.2c Tầng BM25 tách tiếng Việt theo âm tiết — phát hiện khi ghép backend thật
+
+Cùng gốc với 14.2b. `tokenize()` dùng `\w+` nên tiếng Việt bị vỡ thành từng âm tiết,
+và BM25 không biết âm tiết nào đi với âm tiết nào.
+
+**Đã sửa — hư từ quyết định thứ hạng.** Câu `"từ nào nói về gia đình"` trả về `resign`
+ở hạng 1. Âm tiết `từ` khớp nghĩa `"từ chức"` của `resign`; trong corpus 39 thẻ nó là
+thẻ **duy nhất** chứa `từ` nên IDF vọt lên, cho 2.85 điểm trong khi mọi thẻ khác 0 điểm.
+Toàn bộ thứ hạng lexical do một hư từ quyết định. Sửa ở `app/retrieval/stopwords.py`:
+lọc hư từ khỏi **câu hỏi**, giữ nguyên corpus để thống kê IDF và độ dài tài liệu của
+BM25 không bị méo. Test hồi quy: `test_bm25_khong_de_hu_tu_quyet_dinh_thu_hang`.
+
+**Chưa sửa — âm tiết trùng giữa hai từ ghép khác nghĩa.** `"từ nào nói về việc rời bỏ
+công việc"` đưa `recipe` lên hạng 1, vì nghĩa của nó là `"công thức"` và âm tiết `công`
+trùng với `công việc`. Đây là hư từ thật sự mang nghĩa nên không lọc được; muốn xử lý
+phải tách từ tiếng Việt (`underthesea`, `pyvi`) thay vì tách theo `\w+`. Mức độ ảnh
+hưởng thấp — tầng semantic vẫn đưa đáp án đúng vào top-3 — nên gộp chung với 14.2b để
+xem xét ở M7.
+
 ### 14.2 Quên prefix E5
 
 Hệ thống vẫn chạy, retrieval âm thầm kém. `scripts/m0_embedding.py` ở M0 và ngưỡng Recall@5 ≥ 0.80 ở M2 là lưới bắt. Nếu Recall thấp bất thường, **kiểm tra prefix đầu tiên**.
