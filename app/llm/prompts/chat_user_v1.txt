@@ -1,0 +1,7 @@
+<NGỮ_CẢNH>
+{{context}}
+</NGỮ_CẢNH>
+
+<CÂU_HỎI>
+{{question}}
+</CÂU_HỎI>

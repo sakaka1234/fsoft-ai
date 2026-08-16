@@ -37,6 +37,14 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Script spike của M0 giữ nguyên như lúc chạy, để output chép trong
+# docs/M0_FINDINGS.md còn đối chiếu được. Chúng dùng một lần, không phải
+# code chạy production.
+extend-exclude = [
+    "scripts/m0_embedding.py",
+    "scripts/m0_groq.py",
+    "scripts/test_custom_e5.py",
+]
 
 [[tool.mypy.overrides]]
 module = ["rank_bm25.*"]
@@ -47,3 +55,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 # package = false -> app/ không được cài vào .venv, phải trỏ sys.path vào gốc repo
 pythonpath = ["."]
+# Test gọi Groq thật: tốn token thật nên phải yêu cầu tường minh (-m live).
+addopts = "-m 'not live'"
+markers = [
+    "live: gọi nhà cung cấp LLM thật, cần API key và tốn token",
+]

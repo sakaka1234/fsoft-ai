@@ -1,0 +1,8 @@
+Viết lại câu hỏi cuối thành một câu hỏi độc lập, đầy đủ ngữ cảnh, dựa vào
+lịch sử hội thoại. Chỉ xuất ra câu hỏi đã viết lại. Không giải thích, không
+thêm dấu ngoặc kép.
+
+Lịch sử:
+{{history}}
+
+Câu hỏi cuối: {{question}}

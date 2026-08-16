@@ -21,6 +21,9 @@ from app.config import Settings, get_settings, resolve_path
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.embedding.encoder import Encoder
+from app.llm.budget import TokenBudget
+from app.llm.client import LlmClient
+from app.llm.registry import PromptRegistry
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.intent import IntentClassifier
 from app.retrieval.search_index import SearchIndex
@@ -51,6 +54,9 @@ class Service:
     syncer: Syncer
     retriever: HybridRetriever
     intent_classifier: IntentClassifier
+    budget: TokenBudget
+    prompts: PromptRegistry
+    llm: LlmClient
 
     encoder_ready: bool = False
     index_ready: bool = False
@@ -82,16 +88,18 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
 
     card_repo = CardRepo(db)
     sync_state_repo = SyncStateRepo(db)
+    usage_repo = UsageRepo(db)
     index = SearchIndex(settings.ai_embedding_dim)
     encoder = encoder or Encoder(settings)
     source = build_source(settings)
+    budget = TokenBudget(settings.ai_global_tokens_per_minute)
 
     return Service(
         settings=settings,
         db=db,
         card_repo=card_repo,
         sync_state_repo=sync_state_repo,
-        usage_repo=UsageRepo(db),
+        usage_repo=usage_repo,
         index=index,
         encoder=encoder,
         source=source,
@@ -111,6 +119,9 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
             min_score=settings.ai_min_score,
         ),
         intent_classifier=IntentClassifier(encoder, min_margin=settings.ai_intent_min_margin),
+        budget=budget,
+        prompts=PromptRegistry(),
+        llm=LlmClient(settings, budget, usage_repo),
     )
 
 
@@ -187,6 +198,8 @@ async def lifespan(app: FastAPI):
 
         if isinstance(service.source, HttpCardSource):
             await service.source.aclose()
+
+        await service.llm.aclose()
 
         await anyio.to_thread.run_sync(service.db.close_sync)
 
