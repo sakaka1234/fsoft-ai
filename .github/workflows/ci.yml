@@ -63,16 +63,35 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
+      # Kéo lịch sử của những lần chạy trước về TRƯỚC khi đo, rồi mới nối thêm
+      # một dòng. Không có bước này thì mỗi lần chạy sinh ra đúng một dòng và
+      # "lịch sử để phát hiện hồi quy" ở SPEC muc 11.8 không tồn tại — chỉ là
+      # một loạt ảnh chụp rời rạc, không nhìn ra xu hướng.
+      #
+      # `key` luôn trượt (run_id là duy nhất), `restore-keys` khớp tiền tố nên
+      # luôn lấy được bản mới nhất. Đây là cách chuẩn để dùng actions/cache như
+      # một kho ghi-thêm.
+      - name: Khôi phục lịch sử số đo
+        uses: actions/cache@v4
+        with:
+          path: metrics
+          key: eval-history-${{ github.run_id }}
+          restore-keys: |
+            eval-history-
+
       # Chạy riêng sau test: đây là cổng chặn hồi quy CHẤT LƯỢNG, khác với
       # test là cổng chặn hồi quy HÀNH VI. Recall tụt mà test vẫn xanh là
       # chuyện hoàn toàn có thể xảy ra.
       - name: Bộ đo retrieval
         run: uv run python scripts/run_eval.py --json metrics/eval_history.jsonl
 
+      # Tên artifact cố định, không gắn SHA: người xem tải về một file là thấy
+      # cả quá trình, thay vì phải tải hàng chục artifact rồi tự ghép.
       - name: Lưu lịch sử số đo
-        if: always()
+        if: hashFiles('metrics/eval_history.jsonl') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: eval-history-${{ github.sha }}
+          name: eval-history
           path: metrics/eval_history.jsonl
           retention-days: 90
+          overwrite: true

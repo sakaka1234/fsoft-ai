@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     )
 
     # ---- Service ----
+    # CHƯA ĐƯỢC ĐỌC Ở ĐÂU. Cổng thật do `uvicorn --port` quyết định, kể cả
+    # trong Dockerfile. Giữ lại cho khớp SPEC muc 12, nhưng đổi giá trị này
+    # KHÔNG có tác dụng gì.
     ai_service_port: int = 8000
     ai_internal_token: str = "dev-token"
     ai_log_level: str = "INFO"
@@ -63,6 +66,9 @@ class Settings(BaseSettings):
     ai_query_prefix: str = "query: "
     ai_passage_prefix: str = "passage: "
     ai_embed_batch_size: int = 32
+    # CHƯA ĐƯỢC ĐỌC Ở ĐÂU. Tokenizer của E5 tự cắt ở 512 token, nên hiện giới
+    # hạn này có hiệu lực ngầm chứ không phải do code ta áp. Thẻ dài hơn bị cắt
+    # âm thầm — muốn cảnh báo thì phải tự đếm token trong text_builder.
     ai_embed_max_tokens: int = 512
     fastembed_cache_path: Path | None = None
 

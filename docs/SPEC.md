@@ -1556,7 +1556,9 @@ AI_DB_PATH=./data/fsoft-ai.db           # Railway: /data/fsoft-ai.db (gắn volu
 AI_SOURCE_MODE=fixture                  # fixture | http
 AI_FIXTURE_PATH=tests/fixtures/cards.json
 AI_BACKEND_URL=https://fsoft-project-production.up.railway.app/fsoft
-AI_BACKEND_TOKEN=                       # X-Internal-Token gửi SANG backend
+# X-Internal-Token gửi SANG backend. Chú thích PHẢI ở dòng riêng: với dòng để
+# trống, python-dotenv lấy nguyên chuỗi chú thích làm GIÁ TRỊ.
+AI_BACKEND_TOKEN=
 AI_BACKEND_TIMEOUT_SECONDS=20
 AI_BACKEND_PAGE_SIZE=200
 

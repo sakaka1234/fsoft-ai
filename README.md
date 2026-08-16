@@ -60,9 +60,9 @@ embedding nào, không tốn token, không phụ thuộc mạng.
                                                     ┌────────────────────────┐
                                                     │ 7. Semantic cache      │  trúng -> CACHE · 0 token
                                                     │ 8. Dựng ngữ cảnh       │
-                                                    │ 9. Kiểm ngân sách      │  hết -> hạ model / 503
-                                                    │ 10. Gọi Groq           │
-                                                    └───────────┬────────────┘
+                                                    │ 9. Kiểm ngân sách      │  cạn -> 429, chưa gọi Groq
+                                                    │ 10. Gọi Groq           │  Groq trả 429 -> hạ model
+                                                    └───────────┬────────────┘  vẫn hỏng -> 503
                                                                 ▼
                                                           RAG · ~1.000 token
 ```
@@ -126,10 +126,18 @@ nó vừa là dữ liệu test vừa là hợp đồng đối chiếu với đ�
 ## Ép đồng bộ, không đợi hết 120 giây
 
 ```bash
-TOKEN=$(grep AI_INTERNAL_TOKEN .env | cut -d= -f2)
+# Neo `^` là bắt buộc: không có nó, grep còn khớp cả dòng AI_BACKEND_TOKEN
+# (chú thích của nó có nhắc tên AI_INTERNAL_TOKEN) và $TOKEN sẽ chứa xuống dòng.
+TOKEN=$(grep -E '^AI_INTERNAL_TOKEN=' .env | head -1 | cut -d= -f2 | tr -d ' ')
 
 curl -X POST -H "X-Internal-Token: $TOKEN" localhost:8000/internal/v1/index/sync
 curl -H "X-Internal-Token: $TOKEN" localhost:8000/internal/v1/index/status
+```
+
+PowerShell:
+
+```powershell
+$TOKEN = (Select-String -Path .env -Pattern '^AI_INTERNAL_TOKEN=(.+)$').Matches[0].Groups[1].Value.Trim()
 ```
 
 Hai tham số hữu ích:
@@ -192,8 +200,14 @@ AI_MODEL_QUIZ=llama-3.3-70b-versatile     # sinh quiz, cần JSON mode
 AI_MODEL_FALLBACK=llama-3.1-8b-instant    # dùng khi ngân sách token gần cạn
 ```
 
-Model quiz **bắt buộc hỗ trợ JSON mode**. Kiểm bằng `uv run python scripts/m0_groq.py`
-trước khi đổi.
+Model quiz **bắt buộc hỗ trợ JSON mode**. Kiểm trước khi đổi — script đọc `GROQ_API_KEY`
+từ môi trường chứ không đọc `.env`, và chỉ kiểm những model có trong danh sách
+`CANDIDATES` của chính nó:
+
+```powershell
+$env:GROQ_API_KEY = "gsk_..."
+uv run python scripts/m0_groq.py
+```
 
 ---
 
@@ -272,10 +286,12 @@ uv run pytest -m live
 app/
   api/v1/       chat · search · quiz · index · stats
   chat/         orchestrator 12 bước, semantic cache, câu trả lời mẫu
+  core/         logging có cấu trúc, lỗi và mã lỗi
   embedding/    encoder ONNX, vector index trong RAM, dựng text để embed
   llm/          client Groq, ngân sách token, prompt (tách khỏi code)
   quiz/         3 dạng không cần LLM + 1 dạng cần, bộ chọn nhiễu, validator
   retrieval/    3 tầng + RRF, phân loại ý định, hư từ, dựng ngữ cảnh
+  schemas/      pydantic model cho request/response
   store/        SQLite thuần SQL, không ORM
   sync/         syncer, nguồn HTTP và nguồn fixture
 docs/           SPEC · M0_FINDINGS · BACKEND_INTEGRATION · BACKEND_FEEDBACK

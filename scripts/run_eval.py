@@ -136,18 +136,28 @@ def _write_history(target: Path, report: EvalReport) -> None:
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    print(f"\nĐã ghi số đo vào {target}")
+    so_dong = sum(1 for _ in target.open(encoding="utf-8"))
+
+    print(f"\nĐã ghi số đo vào {target} ({so_dong} lần đo trong lịch sử)")
 
 
 def main() -> int:
-    report = asyncio.run(evaluate(show_scores="--scores" in sys.argv))
+    # Bảng kết quả có tiếng Việt có dấu. Trên Windows, stdout chuyển hướng ra
+    # file hoặc pipe dùng bảng mã cp1252 và `print` sẽ ném UnicodeEncodeError —
+    # đúng lúc người ta cần lưu lại kết quả nhất.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    print(report.format_table())
+    report = asyncio.run(evaluate(show_scores="--scores" in sys.argv))
 
     target = _json_target()
 
+    # Ghi số đo TRƯỚC khi in: một lỗi lúc in không được phép làm mất kết quả
+    # vừa mất mấy phút để đo.
     if target is not None:
         _write_history(target, report)
+
+    print(report.format_table())
 
     failed = (
         report.recall_at_5 < RECALL_THRESHOLD
