@@ -1,0 +1,49 @@
+# Mọi thứ ở đây bị loại khỏi build context — không được gửi sang Docker daemon,
+# kể cả khi Dockerfile không COPY tới.
+#
+# Không có file này thì `docker build` phải nén và gửi đi hơn 1 GB rác trước khi
+# chạy dòng đầu tiên: `.venv/` của máy host và `.cache/fastembed` chứa model
+# 470 MB. Bản model của host hoàn toàn vô ích vì image tự tải lại bản của mình.
+#
+# CỐ Ý KHÔNG dùng quy tắc phủ định `!`. Kiểu `tests/` rồi `!tests/fixtures/` phụ
+# thuộc vào thứ tự và phiên bản BuildKit, và khi nó hiểu sai thì triệu chứng là
+# `COPY tests/fixtures ./tests/fixtures` báo "file not found" giữa lúc build —
+# rất khó đoán ra. `tests/` và `scripts/` cộng lại chưa tới 1 MB nên cứ gửi cả,
+# đổi lấy sự chắc chắn.
+
+# ---- Nặng nhất ----
+.venv/
+.cache/
+data/
+metrics/
+
+# ---- Bí mật: TUYỆT ĐỐI không để lọt vào image ----
+# .env chứa khoá Groq thật. Cấu hình phải truyền lúc CHẠY (`--env-file` hoặc
+# `environment:` trong compose), không bao giờ nướng vào layer — ai kéo được
+# image là đọc được.
+.env
+
+# ---- Không liên quan tới việc build ----
+.git/
+.github/
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+docs/
+
+# ---- Rác của công cụ ----
+# Tiền tố `**/` là BẮT BUỘC. Không có nó, `__pycache__/` chỉ khớp thư mục ở GỐC
+# context — 13 thư mục `__pycache__` nằm trong app/ và scripts/ vẫn lọt vào
+# image. Đây không phải quy tắc phủ định nên dùng an toàn.
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.idea/
+.vscode/
+*.db
+*.db-wal
+*.db-shm

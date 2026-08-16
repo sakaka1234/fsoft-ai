@@ -85,6 +85,14 @@ backend Java ──► GET /fsoft/internal/cards/changed-since  ──► embed 
 Cần Python 3.12 và [uv](https://docs.astral.sh/uv/). Không cần Docker, không cần
 backend Java, không cần khoá Groq để khởi động.
 
+> Muốn chạy bằng **Docker** thay vì cài Python? Ba lệnh là xong, xem
+> [docs/DOCKER.md](docs/DOCKER.md):
+>
+> ```bash
+> cp .env.example .env
+> docker compose up --build
+> ```
+
 ```bash
 uv sync
 cp .env.example .env

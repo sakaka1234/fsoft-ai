@@ -1,0 +1,73 @@
+# Chạy fsoft-ai bằng một lệnh. Xem docs/DOCKER.md.
+#
+#   cp .env.example .env      # BẮT BUỘC làm trước, nếu không compose sẽ báo lỗi
+#   docker compose up --build
+
+services:
+  fsoft-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fsoft-ai:local
+    container_name: fsoft-ai
+
+    ports:
+      - "8000:8000"
+
+    # Nạp cấu hình lúc CHẠY, không nướng vào image. Ai kéo được image cũng không
+    # đọc được khoá Groq.
+    env_file:
+      - .env
+
+    # Đè lên .env. BẮT BUỘC phải có khối này.
+    #
+    # `.env` được viết cho máy dev nên chứa đường dẫn tương đối của HOST:
+    #   AI_DB_PATH=./data/fsoft-ai.db
+    #   FASTEMBED_CACHE_PATH=./.cache/fastembed
+    #
+    # Trong container hai đường dẫn đó đều sai, và cái sai thứ hai hỏng rất khó
+    # thấy: model không nằm ở /app/.cache nên service sẽ đi TẢI LẠI 470 MB lúc
+    # khởi động, dù image đã có sẵn model ở /opt/fastembed_cache.
+    environment:
+      AI_DB_PATH: /data/fsoft-ai.db
+      FASTEMBED_CACHE_PATH: /opt/fastembed_cache
+
+      # Đổi thành "http" khi đã có backend Java. Khi đó phải điền cả
+      # AI_BACKEND_URL và AI_BACKEND_TOKEN trong .env.
+      AI_SOURCE_MODE: ${AI_SOURCE_MODE:-fixture}
+
+    volumes:
+      # SQLite + vector đã embed. Không có volume này thì mỗi lần `docker compose
+      # down` là mất sạch index, và lần chạy sau phải embed lại từ đầu.
+      - fsoft-ai-data:/data
+
+    restart: unless-stopped
+
+    healthcheck:
+      # Ghi đè HEALTHCHECK trong Dockerfile chỉ để chỉnh thời gian cho máy dev.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/readyz', timeout=4).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+
+    # RSS đo được khoảng 784 MB, phần lớn là model ONNX. Đặt trần 1 GB để nếu rò
+    # rỉ bộ nhớ thì container chết hẳn và restart, thay vì kéo cả máy xuống.
+    # Đặt dưới 900 MB là OOM ngay lúc nạp model.
+    mem_limit: 1g
+
+    # 1 CPU là đủ: OMP_NUM_THREADS=1 nên embedding vốn chạy đơn luồng.
+    cpus: 1.0
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  fsoft-ai-data:

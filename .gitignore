@@ -19,6 +19,9 @@ data/
 # ---- Số đo do CI sinh ra, lưu dạng artifact chứ không commit ----
 metrics/
 
+# ---- Docker: bản đè cấu hình riêng của từng máy ----
+docker-compose.override.yml
+
 # ---- Công cụ ----
 .pytest_cache/
 .ruff_cache/
