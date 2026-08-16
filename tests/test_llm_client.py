@@ -5,6 +5,7 @@ Không gọi Groq thật: mock ở tầng transport của httpx2. Test gọi th�
 ở cuối, đánh dấu `live` và bị bỏ qua mặc định (`uv run pytest -m live`).
 """
 
+import ast
 import json as jsonlib
 import re
 import time
@@ -82,6 +83,53 @@ def rate_limited(retry_after: str = "0"):
     return httpx2.Response(
         429, json={"error": {"message": "quá tải"}}, headers={"retry-after": retry_after}
     )
+
+
+def ok_stream(text: str = "Xin chào", model: str = "llama-3.3-70b-versatile"):
+    """
+    Phản hồi dạng SSE cho `stream=True`.
+
+    SDK openai parse thân dạng `data: {...}` chứ không phải JSON thường — trả
+    nhầm JSON thường thì stream chạy nhưng KHÔNG phát token nào, im lặng.
+    """
+
+    def chunk(delta: dict, usage: dict | None = None) -> str:
+        payload = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+        }
+
+        if usage is not None:
+            payload["choices"] = []
+            payload["usage"] = usage
+
+        return f"data: {jsonlib.dumps(payload, ensure_ascii=False)}\n\n"
+
+    # Cắt thành nhiều mẩu để test thứ tự sự kiện có ý nghĩa.
+    pieces = [text[i : i + 8] for i in range(0, len(text), 8)] or [""]
+
+    body = "".join(chunk({"content": piece}) for piece in pieces)
+    body += chunk({}, usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150})
+    body += "data: [DONE]\n\n"
+
+    return httpx2.Response(
+        200, content=body.encode("utf-8"), headers={"content-type": "text/event-stream"}
+    )
+
+
+def auto(text: str = "Xin chào", model: str = "llama-3.3-70b-versatile"):
+    """Tự chọn dạng phản hồi theo việc request có `stream: true` hay không."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if jsonlib.loads(request.content).get("stream"):
+            return ok_stream(text, model)
+
+        return ok(text, model)
+
+    return handler
 
 
 @pytest.fixture
@@ -229,23 +277,55 @@ def test_system_prompt_giu_nguyen_canh_bao_bao_mat() -> None:
 # ---------------------------------------------------------------------
 
 
+def _docstring_nodes(tree: ast.AST) -> set[int]:
+    """id() của mọi node docstring, để loại khỏi phép quét."""
+
+    found = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = getattr(node, "body", [])
+
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                found.add(id(body[0].value))
+
+    return found
+
+
 def test_khong_co_prompt_nhung_trong_file_py() -> None:
     """
     Acceptance SPEC muc 11.4: không prompt nào được nhúng trong .py ngoài
     app/llm/prompts/.
 
-    Dò bằng dấu hiệu đặc trưng của prompt tiếng Việt gửi cho model.
+    Chỉ quét CHUỖI THẬT trong code, bỏ qua comment và docstring: tài liệu được
+    phép nhắc tới nội dung prompt, chỉ có việc GỬI ĐI một prompt viết thẳng
+    trong Python mới là vi phạm.
     """
 
     dau_hieu = re.compile(
-        r"Bạn là trợ lý|QUY TẮC BẮT BUỘC|CẢNH BÁO BẢO MẬT|<NGỮ_CẢNH>|Viết lại câu hỏi",
+        r"Bạn là trợ lý|QUY TẮC BẮT BUỘC|CẢNH BÁO BẢO MẬT|<NGỮ_CẢNH>"
+        r"|Viết lại câu hỏi|Bạn là bộ|Nhiệm vụ của bạn",
     )
 
     vi_pham: list[str] = []
 
     for path in (PROJECT_ROOT / "app").rglob("*.py"):
-        if dau_hieu.search(path.read_text(encoding="utf-8")):
-            vi_pham.append(str(path.relative_to(PROJECT_ROOT)))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        skip = _docstring_nodes(tree)
+
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and id(node) not in skip
+                and dau_hieu.search(node.value)
+            ):
+                vi_pham.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno}")
 
     assert vi_pham == [], f"Prompt bị nhúng trong: {vi_pham}"
 

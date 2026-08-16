@@ -13,6 +13,7 @@ BỐN LỚP xử lý rate limit, theo đúng thứ tự:
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import openai
@@ -40,6 +41,15 @@ class LlmResult:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int
+
+
+@dataclass(slots=True)
+class StreamChunk:
+    """Một mẩu token, hoặc mẩu cuối mang theo số liệu sử dụng."""
+
+    text: str
+    done: bool = False
+    usage: LlmResult | None = None
 
 
 def parse_retry_after(headers, default: float) -> float:
@@ -273,6 +283,122 @@ class LlmClient:
                 raise
 
         raise ProviderUnavailable("Hết số lần thử lại.")
+
+    # ---------------------------------------------------------------
+    # Streaming
+    # ---------------------------------------------------------------
+
+    async def stream(
+        self,
+        *,
+        task: str,
+        system: str,
+        user: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        intent: str | None = None,
+        answer_source: str | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Phát từng token một. SPEC muc 8.2.
+
+        Khác `complete()` ở chỗ KHÔNG hạ cấp model và KHÔNG thử lại: một khi đã
+        bắt đầu phát token cho người dùng thì không thể quay lại từ đầu. Hỏng
+        giữa chừng thì phát sự kiện `error`.
+        """
+
+        chosen = model or self._settings.ai_model_chat
+
+        estimated = estimate_tokens(system) + estimate_tokens(user)
+        estimated += max_tokens or self._settings.ai_max_output_tokens
+
+        self._budget.reserve(estimated)
+
+        started = time.perf_counter()
+        prompt_tokens = 0
+        completion_tokens = 0
+        text_len = 0
+
+        try:
+            stream = await self._client.chat.completions.create(
+                model=chosen,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=max_tokens or self._settings.ai_max_output_tokens,
+                temperature=(
+                    temperature if temperature is not None else self._settings.ai_temperature
+                ),
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+
+            async for event in stream:
+                if event.usage:
+                    prompt_tokens = event.usage.prompt_tokens
+                    completion_tokens = event.usage.completion_tokens
+
+                if not event.choices:
+                    continue
+
+                piece = event.choices[0].delta.content
+
+                if piece:
+                    text_len += len(piece)
+                    yield StreamChunk(text=piece)
+
+        except openai.APIError as exc:
+            await self._log_usage(
+                task=task,
+                model=chosen,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                success=False,
+                intent=intent,
+                answer_source=answer_source,
+                error_code=type(exc).__name__,
+            )
+
+            log.warning("llm_stream_failed", model=chosen, error=str(exc))
+
+            raise ProviderUnavailable(
+                "Trợ lý AI đang quá tải, vui lòng thử lại sau ít phút."
+            ) from exc
+
+        finally:
+            # Chạy cả khi client ngắt kết nối giữa chừng (GeneratorExit) — token
+            # đã tiêu rồi thì phải ghi nhận, nếu không ngân sách sẽ lệch dần.
+            actual = prompt_tokens + completion_tokens
+
+            if actual == 0:
+                # Groq đôi khi không gửi usage khi stream bị cắt.
+                actual = estimate_tokens(system) + estimate_tokens(user) + text_len // 3
+
+            self._budget.settle(estimated, actual)
+
+        await self._log_usage(
+            task=task,
+            model=chosen,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            success=True,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            intent=intent,
+            answer_source=answer_source,
+        )
+
+        yield StreamChunk(
+            text="",
+            done=True,
+            usage=LlmResult(
+                text="",
+                model=chosen,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            ),
+        )
 
     async def _log_usage(
         self,

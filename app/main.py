@@ -15,8 +15,11 @@ import anyio
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from app.api.v1 import chat as chat_api
 from app.api.v1 import index as index_api
 from app.api.v1 import search as search_api
+from app.chat.orchestrator import ChatOrchestrator
+from app.chat.semantic_cache import SemanticCache
 from app.config import Settings, get_settings, resolve_path
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -57,6 +60,8 @@ class Service:
     budget: TokenBudget
     prompts: PromptRegistry
     llm: LlmClient
+    cache: SemanticCache
+    orchestrator: ChatOrchestrator
 
     encoder_ready: bool = False
     index_ready: bool = False
@@ -93,6 +98,26 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
     encoder = encoder or Encoder(settings)
     source = build_source(settings)
     budget = TokenBudget(settings.ai_global_tokens_per_minute)
+    prompts = PromptRegistry()
+    llm = LlmClient(settings, budget, usage_repo)
+    intent_classifier = IntentClassifier(encoder, min_margin=settings.ai_intent_min_margin)
+
+    retriever = HybridRetriever(
+        index,
+        rrf_k=settings.ai_rrf_k,
+        lexical_candidates=settings.ai_lexical_candidates,
+        semantic_candidates=settings.ai_semantic_candidates,
+        min_score=settings.ai_min_score,
+    )
+
+    cache = SemanticCache(
+        # AI_DEMO_MODE hạ ngưỡng để ngày bảo vệ nhiều câu hỏi tương tự cùng
+        # trúng cache hơn, giảm rủi ro nghẽn token (SPEC muc 14.1).
+        threshold=0.90 if settings.ai_demo_mode else settings.ai_semantic_cache_threshold,
+        max_size=settings.ai_semantic_cache_max_size,
+        ttl_hours=settings.ai_semantic_cache_ttl_hours,
+        enabled=settings.ai_semantic_cache_enabled,
+    )
 
     return Service(
         settings=settings,
@@ -110,18 +135,23 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
             index=index,
             encoder=encoder,
             settings=settings,
+            on_index_changed=cache.invalidate_all,
         ),
-        retriever=HybridRetriever(
-            index,
-            rrf_k=settings.ai_rrf_k,
-            lexical_candidates=settings.ai_lexical_candidates,
-            semantic_candidates=settings.ai_semantic_candidates,
-            min_score=settings.ai_min_score,
-        ),
-        intent_classifier=IntentClassifier(encoder, min_margin=settings.ai_intent_min_margin),
+        retriever=retriever,
+        intent_classifier=intent_classifier,
         budget=budget,
-        prompts=PromptRegistry(),
-        llm=LlmClient(settings, budget, usage_repo),
+        prompts=prompts,
+        llm=llm,
+        cache=cache,
+        orchestrator=ChatOrchestrator(
+            settings=settings,
+            encoder=encoder,
+            retriever=retriever,
+            intent_classifier=intent_classifier,
+            llm=llm,
+            prompts=prompts,
+            cache=cache,
+        ),
     )
 
 
@@ -223,6 +253,7 @@ def create_app(settings: Settings | None = None, encoder: Encoder | None = None)
     register_exception_handlers(app)
     app.include_router(index_api.router)
     app.include_router(search_api.router)
+    app.include_router(chat_api.router)
 
     @app.get("/healthz", tags=["Health"])
     async def healthz() -> dict:

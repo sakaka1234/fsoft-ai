@@ -13,6 +13,7 @@ Nguyên tắc bất di bất dịch: lỗi đồng bộ KHÔNG BAO GIỜ đượ
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -69,6 +70,7 @@ class Syncer:
         index: SearchIndex,
         encoder: Encoder,
         settings: Settings,
+        on_index_changed: Callable[[], None] | None = None,
     ) -> None:
         self._source = source
         self._cards = card_repo
@@ -76,7 +78,20 @@ class Syncer:
         self._index = index
         self._encoder = encoder
         self._settings = settings
+        # Gọi khi index thay đổi. Semantic cache dùng nó để tự xoá: câu trả lời
+        # đã cache dựng từ nội dung thẻ, thẻ đổi thì câu trả lời cũ thành sai.
+        self._on_index_changed = on_index_changed
         self.state = SyncerState()
+
+    def _notify_index_changed(self) -> None:
+        if self._on_index_changed is None:
+            return
+
+        try:
+            self._on_index_changed()
+
+        except Exception:
+            log.exception("on_index_changed_failed")
 
     # ---------------------------------------------------------------
     # Đồng bộ gia tăng
@@ -251,6 +266,8 @@ class Syncer:
 
         self._index.upsert([StoredCard(card=item.source, vector=item.vector) for item in to_store])
 
+        self._notify_index_changed()
+
         for item in to_store:
             fingerprints[item.source.card_id] = CardFingerprint(
                 content_hash=item.content_hash,
@@ -286,6 +303,8 @@ class Syncer:
         if to_delete:
             await self._cards.delete_many(to_delete)
             self._index.delete(to_delete)
+
+            self._notify_index_changed()
 
             log.info("sweep_deleted", count=len(to_delete), card_ids=sorted(to_delete))
 
