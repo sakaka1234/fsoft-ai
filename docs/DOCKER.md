@@ -255,10 +255,20 @@ docker compose exec fsoft-ai python -c "import urllib.request as u; print(u.urlo
 
 Nó sẽ chỉ ra `encoder_ready` hay `index_ready` đang là `false`.
 
-### `PermissionError: Permission denied: '/app/data'`
+### Khởi động dừng ngay với `Cấu hình đường dẫn không dùng được`
 
-`AI_DB_PATH` là đường dẫn tương đối. Trong container chỉ `/data` ghi được. Đặt
-`AI_DB_PATH=/data/fsoft-ai.db`. Chi tiết ở [mục 11b](#11b-triển-khai-lên-render--và-hai-lỗi-chắc-chắn-gặp).
+Đây là preflight đang làm việc. Nó liệt kê từng biến sai kèm giá trị đúng — làm đúng theo
+thông báo là xong, không cần tra thêm. Hai thủ phạm thường gặp là `AI_DB_PATH` và
+`FASTEMBED_CACHE_PATH` bị đặt bằng đường dẫn tương đối.
+
+### Service báo "live" nhưng mọi request trả `503 INDEX_NOT_READY`
+
+Tìm `warmup_failed` trong log. `warmup` chạy ở task nền nên nó hỏng mà không kéo tiến trình
+xuống — nền tảng vẫn thấy cổng có người nghe và kết luận là thành công.
+
+Nguyên nhân hay gặp nhất là `FASTEMBED_CACHE_PATH` sai, xem
+[mục 11b](#11b-triển-khai-lên-render--và-ba-lỗi-chắc-chắn-gặp). Từ bản mới preflight bắt được
+trường hợp này ngay lúc khởi động.
 
 ### Deploy bị coi là thất bại dù log không có lỗi
 
@@ -346,7 +356,7 @@ lại model 470 MB mỗi lần**, mất vài giây.
 
 ---
 
-## 11b. Triển khai lên Render — và hai lỗi chắc chắn gặp
+## 11b. Triển khai lên Render — và ba lỗi chắc chắn gặp
 
 Render chỉ đọc `Dockerfile`, **không đọc `docker-compose.yml`**. Nghĩa là khối `environment:`
 đè đường dẫn trong compose không hề có tác dụng, và bạn phải tự đặt biến trong bảng điều
@@ -368,7 +378,24 @@ AI_DB_PATH=/data/fsoft-ai.db
 liệu mất mỗi lần container bị thay — không sao, service tự đồng bộ lại từ backend, chỉ tốn
 thời gian embed lại.
 
-### Lỗi 2 — cảnh báo `AI_MIN_SCORE=0.83 không phải ngưỡng đã hiệu chỉnh`
+### Lỗi 2 — `warmup_failed` … `Permission denied: '/app/.cache'`, service "live" nhưng `/readyz` mãi 503
+
+Y hệt lỗi 1, chỉ khác biến: `FASTEMBED_CACHE_PATH=./.cache/fastembed` giải ra `/app/.cache`.
+Encoder không tìm thấy model ở đó nên rơi xuống nhánh tự tải, rồi `fastembed` chết khi cố
+tạo thư mục cache.
+
+Triệu chứng đặc biệt dễ nhầm: Render báo **"Your service is live 🎉"** và URL trả về, nhưng
+mọi request nghiệp vụ đều `503 INDEX_NOT_READY` — vì `warmup` chạy ở task nền, nó hỏng mà
+không kéo tiến trình xuống.
+
+Sửa: `FASTEMBED_CACHE_PATH=/opt/fastembed_cache` (chỗ model đã nạp sẵn lúc build image).
+
+> **Từ bản này về sau, cả hai lỗi trên bị bắt cùng lúc lúc khởi động.** `app/core/preflight.py`
+> kiểm mọi đường dẫn trước khi làm gì khác, liệt kê hết những cái sai trong một thông báo,
+> và **cho deploy thất bại dứt khoát** thay vì để service sống mà không bao giờ sẵn sàng.
+> Thông báo gọi tên từng biến, in ra đường dẫn đã giải, và nói luôn giá trị đúng.
+
+### Lỗi 3 — cảnh báo `AI_MIN_SCORE=0.83 không phải ngưỡng đã hiệu chỉnh`
 
 Cùng nguyên nhân: biến môi trường lấy từ bản `.env` cũ. Bỏ qua cảnh báo này thì **cổng lọc
 liên quan sai âm thầm** — 2 trong 5 case NEGATIVE trả về thẻ bừa thay vì trả rỗng.
@@ -395,6 +422,14 @@ AI_SOURCE_MODE=fixture
 
 Ba biến đầu tiên trùng với `ENV` trong `Dockerfile` nên **không đặt cũng được** — nhưng đặt
 tường minh thì đọc bảng biến là biết ngay service đang chạy cấu hình nào.
+
+**Nguy hiểm nhất là đặt chúng SAI**, vì biến của nền tảng đè lên `ENV` của image. Hai giá trị
+tuyệt đối không được dùng ở đây, dù chúng đúng trên máy dev:
+
+```
+AI_DB_PATH=./data/fsoft-ai.db            <- SAI, giải ra /app/data
+FASTEMBED_CACHE_PATH=./.cache/fastembed  <- SAI, giải ra /app/.cache
+```
 
 **Đừng** đặt `PORT`: Render tự đặt, và `CMD` đã đọc nó.
 

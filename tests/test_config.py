@@ -158,3 +158,75 @@ def test_thu_muc_ton_tai_nhung_khong_ghi_duoc_cung_bao_ro(tmp_path: Path, monkey
 
     with pytest.raises(PermissionError, match="KHÔNG ghi được"):
         db_module.Database(tmp_path / "data" / "fsoft-ai.db").connect_sync()
+
+
+# ---------------------------------------------------------------------
+# Preflight — chặn cả LỚP lỗi đường dẫn, không vá từng biến một
+# ---------------------------------------------------------------------
+
+
+def test_preflight_bao_HET_moi_duong_dan_sai_trong_mot_lan(monkeypatch) -> None:
+    """
+    Deploy lên Render hỏng HAI LẦN LIÊN TIẾP vì cùng một sai sót — dán nguyên
+    `.env` của máy dev, mang theo đường dẫn tương đối — nhưng mỗi lần chỉ lộ ra
+    đúng một biến:
+
+        lần 1  AI_DB_PATH=./data/...            -> Permission denied '/app/data'
+        lần 2  FASTEMBED_CACHE_PATH=./.cache/... -> Permission denied '/app/.cache'
+
+    Vá xong biến thứ nhất lại phải deploy lại mới gặp biến thứ hai. Test này khoá
+    yêu cầu: một lần chạy phải liệt kê HẾT, để sửa một lượt là xong.
+    """
+
+    from app.core import preflight
+
+    monkeypatch.setattr(preflight.os, "access", lambda *_a, **_k: False)
+
+    settings = Settings(
+        ai_db_path=Path("./data/fsoft-ai.db"),
+        fastembed_cache_path=Path("./.cache/fastembed"),
+        ai_source_mode="fixture",
+    )
+
+    with pytest.raises(RuntimeError) as thong_tin:
+        preflight.kiem_duong_dan(settings)
+
+    loi = str(thong_tin.value)
+
+    # Cả hai biến phải cùng có mặt — đây là điểm chính của test.
+    assert "AI_DB_PATH" in loi
+    assert "FASTEMBED_CACHE_PATH" in loi
+
+    # Và mỗi cái phải kèm giá trị đúng, không chỉ nói "sai".
+    assert "/data/fsoft-ai.db" in loi
+    assert "/opt/fastembed_cache" in loi
+
+
+def test_preflight_im_lang_khi_cau_hinh_dung(settings: Settings) -> None:
+    """Cấu hình test hợp lệ thì preflight không được cản đường."""
+
+    from app.core.preflight import kiem_duong_dan
+
+    kiem_duong_dan(settings)
+
+
+def test_preflight_bao_fixture_thieu_chi_khi_dang_dung_fixture(tmp_path: Path) -> None:
+    """
+    `AI_FIXTURE_PATH` trỏ vào tệp không tồn tại chỉ là lỗi khi
+    `AI_SOURCE_MODE=fixture`. Ở chế độ http nó không được đọc, nên bắt lỗi ở đó
+    sẽ chặn oan một cấu hình production hoàn toàn hợp lệ.
+    """
+
+    from app.core.preflight import kiem_duong_dan
+
+    thieu = tmp_path / "khong-co.json"
+
+    with pytest.raises(RuntimeError, match="AI_FIXTURE_PATH"):
+        kiem_duong_dan(
+            Settings(ai_source_mode="fixture", ai_fixture_path=thieu, ai_db_path=tmp_path / "a.db")
+        )
+
+    # Chế độ http: cùng đường dẫn thiếu đó phải được bỏ qua.
+    kiem_duong_dan(
+        Settings(ai_source_mode="http", ai_fixture_path=thieu, ai_db_path=tmp_path / "a.db")
+    )

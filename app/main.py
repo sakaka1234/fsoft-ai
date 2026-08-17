@@ -27,6 +27,7 @@ from app.chat.semantic_cache import SemanticCache
 from app.config import Settings, get_settings, resolve_path
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
+from app.core.preflight import canh_bao_model_khong_co_san, kiem_duong_dan
 from app.embedding.encoder import Encoder
 from app.llm.budget import TokenBudget
 from app.llm.client import LlmClient
@@ -370,8 +371,18 @@ async def warmup(service: Service) -> None:
 async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
 
+    # Kiểm mọi đường dẫn TRƯỚC tiên, báo hết một lượt rồi chết dứt khoát nếu sai.
+    #
+    # Không có bước này thì sai cấu hình đường dẫn nổ ra từ sâu trong thư viện,
+    # SAU khi service đã báo "live", và mỗi lần chỉ lộ ra đúng một biến — vá xong
+    # phải deploy lại để gặp biến tiếp theo. Đã xảy ra hai lần liên tiếp khi lên
+    # Render. Một service báo "live" rồi trả 503 mãi tệ hơn một deploy thất bại.
+    kiem_duong_dan(settings)
+
     service = build_service(settings, encoder=app.state.encoder)
     app.state.service = service
+
+    canh_bao_model_khong_co_san(settings)
 
     await anyio.to_thread.run_sync(service.db.connect_sync)
 
