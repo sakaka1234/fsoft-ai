@@ -119,17 +119,57 @@ class Settings(BaseSettings):
     # ---- LLM (M3) ----
     ai_llm_base_url: str = "https://api.groq.com/openai/v1"
     ai_llm_api_key: str = ""
-    ai_model_chat: str = "llama-3.3-70b-versatile"
-    ai_model_rewrite: str = "llama-3.1-8b-instant"
-    ai_model_quiz: str = "llama-3.3-70b-versatile"
-    ai_model_fallback: str = "llama-3.1-8b-instant"
-    ai_max_output_tokens: int = 400
+    # Bốn model của M0 (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`) đã bị
+    # Groq KHAI TỬ. Gọi vào trả `404 model_not_found`, mà `LlmClient` quy mọi lỗi
+    # nhà cung cấp về `PROVIDER_UNAVAILABLE` nên triệu chứng là "Trợ lý AI đang
+    # quá tải" — không ai đoán được là do model không còn tồn tại.
+    #
+    # Bộ thay thế đo ngày 17/08/2026 trên chính khoá đang dùng. Ba ứng viên còn
+    # lại đều bị loại vì lý do cụ thể:
+    #
+    #   openai/gpt-oss-120b   CHỌN cho chat+quiz. Tiếng Việt tốt, trích dẫn [#id]
+    #                         đúng, JSON mode 4/4. TPM 8.000.
+    #   openai/gpt-oss-20b    CHỌN cho rewrite+fallback. Nhanh, cùng TPM, JSON
+    #                         mode cũng đạt — quan trọng vì fallback dùng cho MỌI
+    #                         task, kể cả quiz cần JSON.
+    #   qwen/qwen3.6-27b      LOẠI: rò khối suy luận `<think>...` thẳng vào
+    #                         `content`, tức là vào câu trả lời của người dùng.
+    #   groq/compound-mini    LOẠI dù TPM 70.000: là hệ thống agentic, tự thêm
+    #                         khung công cụ (727 token prompt so với 219 của
+    #                         gpt-oss cho cùng đầu vào) và có thể tự tra web —
+    #                         phá hợp đồng "chỉ trả lời từ bộ thẻ".
+    ai_model_chat: str = "openai/gpt-oss-120b"
+    ai_model_rewrite: str = "openai/gpt-oss-20b"
+    ai_model_quiz: str = "openai/gpt-oss-120b"
+    ai_model_fallback: str = "openai/gpt-oss-20b"
+    # 400 là con số của thời llama và nó KHÔNG còn an toàn.
+    #
+    # Họ `gpt-oss` sinh `reasoning_tokens` ẩn và TRỪ VÀO chính hạn mức này: đo
+    # được 79-296 token suy luận cho một yêu cầu JSON ngắn. Hệ quả đo được, ba
+    # lần mỗi mức:
+    #
+    #   max_tokens=120  ->  0/3   max_tokens=300  ->  3/3
+    #   max_tokens=200  ->  0/3   max_tokens=500  ->  3/3
+    #
+    # Và cách nó hỏng là thứ tệ nhất: `400 json_validate_failed` với
+    # `failed_generation` RỖNG — không có gì cho biết là hết hạn mức. Đặt 700 để
+    # phần suy luận tệ nhất (296) vẫn còn ~400 token cho câu trả lời thật.
+    ai_max_output_tokens: int = 700
     ai_temperature: float = 0.3
     ai_llm_timeout_seconds: float = 30.0
     ai_llm_max_retries: int = 2
 
     # ---- Ngân sách token (M3) ----
-    ai_global_tokens_per_minute: int = 9600
+    # 80% của 8.000 TPM. Con số 9.600 cũ là 80% của 12.000 TPM mà M0 đo được trên
+    # `llama-3.3-70b-versatile` — model đó không còn, và trần thật của `gpt-oss`
+    # là 8.000 (đọc từ header `x-ratelimit-limit-tokens`, kèm
+    # `x-ratelimit-reset-tokens` dưới 1 giây nên đúng là cửa sổ mỗi phút).
+    #
+    # Nghĩa là 9.600 KHÔNG phải "chừa 20% biên" nữa mà là VƯỢT trần 20%: ngân
+    # sách nội bộ không bao giờ chặn trước, Groq mới là chỗ chặn, và lúc đó lỗi
+    # trả về là 429 của nhà cung cấp chứ không phải `BUDGET_EXHAUSTED` có kèm
+    # `retry_after_seconds` cho client.
+    ai_global_tokens_per_minute: int = 6400
     ai_history_max_messages: int = 6
     ai_context_max_chars_per_field: int = 300
 

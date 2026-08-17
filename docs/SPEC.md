@@ -178,19 +178,35 @@ Cần biết để làm M6 và để parse phản hồi cho đúng.
 
 ## 4. Ràng buộc
 
-### 4.1 Ràng buộc cứng — Groq free tier 12.000 token/phút cho model chat
+### 4.1 Ràng buộc cứng — Groq free tier 8.000 token/phút cho model chat
 
 Giới hạn áp ở cấp **tổ chức**, không phải cấp API key — tạo nhiều key không nhân quota.
 
-**Số thật đo được ở M0** (`docs/M0_FINDINGS.md` mục 3.2), rộng hơn giả định ban đầu ~6.000:
+| Model | TPM thật | RPM/RPD | Trạng thái |
+|---|---:|---:|---|
+| `openai/gpt-oss-120b` (chat, quiz) | **8.000** | 1.000 | đang dùng |
+| `openai/gpt-oss-20b` (rewrite, fallback) | 8.000 | 1.000 | đang dùng |
+| `llama-3.3-70b-versatile` | 12.000 | 1.000 | **KHAI TỬ** — `404 model_not_found` |
+| `llama-3.1-8b-instant` | 6.000 | 14.400 | **KHAI TỬ** |
 
-| Model | TPM thật | RPM/RPD |
-|---|---:|---:|
-| `llama-3.3-70b-versatile` (chat, quiz) | **12.000** | 1.000 |
-| `llama-3.1-8b-instant` (rewrite, fallback) | 6.000 | 14.400 |
-| `openai/gpt-oss-120b` | 8.000 | 1.000 |
+→ `AI_GLOBAL_TOKENS_PER_MINUTE = 6.400` (80% của 8.000).
 
-→ `AI_GLOBAL_TOKENS_PER_MINUTE = 9.600` (thấp hơn 12.000 khoảng 20%).
+Đo lại ngày 17/08/2026 từ header `x-ratelimit-limit-tokens`, sau khi phát hiện cả bốn model
+M0 chọn đều không còn tồn tại. Con số 12.000 và ngân sách 9.600 ghi ở đây trước kia là của
+`llama-3.3-70b-versatile`; trên trần 8.000 thì 9.600 **vượt trần 20%**, nghĩa là ngân sách nội
+bộ không bao giờ chặn trước và Groq mới là chỗ chặn — client nhận 429 của nhà cung cấp thay vì
+`BUDGET_EXHAUSTED` có kèm `retry_after_seconds`.
+
+Kiểm model còn sống trước khi đổi:
+
+```bash
+curl -H "Authorization: Bearer $AI_LLM_API_KEY" https://api.groq.com/openai/v1/models
+```
+
+**Bẫy riêng của họ `gpt-oss`:** chúng sinh `reasoning_tokens` ẩn và trừ vào `max_tokens`. Đo
+được 79–296 token suy luận cho một yêu cầu JSON ngắn, và dưới 300 thì JSON mode hỏng **0/3
+lần** với lỗi `400 json_validate_failed` kèm `failed_generation` **rỗng** — không có gì cho
+biết nguyên nhân là hết hạn mức. Vì vậy `AI_MAX_OUTPUT_TOKENS = 700`, không phải 400.
 
 Một lượt chat RAG làm theo kiểu sách vở tốn khoảng **2.350 token** (chi tiết ở [Phụ lục B](#phụ-lục-b--bài-toán-token)), tức chỉ khoảng **4 lượt chat mỗi phút cho toàn bộ ứng dụng**. Ngày bảo vệ có 3–4 người chấm mở cùng lúc là nghẽn.
 

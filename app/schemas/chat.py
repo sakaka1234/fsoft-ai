@@ -231,7 +231,7 @@ VI_DU_CHAT: dict = {
             "lần (lần chạy lại trúng cache), `intent` ra `EXAMPLE_REQUEST` 5 lần và "
             "`VOCAB_LOOKUP` 2 lần, `prompt_tokens` dao động 520–660. Nếu bạn cần một "
             "ví dụ ổn định để so sánh thì dùng `can_dien_giai`.\n\n"
-            "Bước viết lại tiêu thêm khoảng 150 token của model `llama-3.1-8b-instant` "
+            "Bước viết lại tiêu thêm khoảng 150 token của model `openai/gpt-oss-20b` "
             "và số đó **không** nằm trong `usage` — muốn thấy thì xem "
             "`GET /internal/v1/stats`.\n\n"
             "Xoá `history` đi rồi gửi lại: `rewritten_query` thành `null`, không ai "
@@ -427,11 +427,11 @@ class UsageOut(BaseModel):
         description=(
             "Model đã sinh câu trả lời. `null` ở ba nhánh 0 token vì không có "
             "lời gọi nào.\n\n"
-            "Có thể là model dự phòng `llama-3.1-8b-instant` thay vì "
-            "`llama-3.3-70b-versatile` nếu model chính đang bị nhà cung cấp chặn "
+            "Có thể là model dự phòng `openai/gpt-oss-20b` thay vì "
+            "`openai/gpt-oss-120b` nếu model chính đang bị nhà cung cấp chặn "
             "vì quá tải — câu trả lời khi đó ngắn và đơn giản hơn bình thường."
         ),
-        examples=["llama-3.3-70b-versatile"],
+        examples=["openai/gpt-oss-120b"],
     )
     prompt_tokens: int = Field(
         description=(

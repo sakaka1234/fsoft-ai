@@ -6,6 +6,24 @@
 > Ngày chạy: 16/08/2026 · Máy: Windows 10, Python 3.12.4 · Sinh ra bởi
 > `scripts/m0_embedding.py` và `scripts/m0_groq.py`.
 
+> ## ⚠ Phần LLM của tài liệu này đã LỖI THỜI (17/08/2026)
+>
+> **Cả hai model M0 chọn đều đã bị Groq khai tử.** Gọi vào trả `404 model_not_found`, và triệu
+> chứng ở API là `PROVIDER_UNAVAILABLE` "Trợ lý AI đang quá tải" — không hề nói ra nguyên nhân.
+> Chat hỏng 100% cho tới khi đổi model.
+>
+> | M0 chọn | Trạng thái | Thay bằng |
+> |---|---|---|
+> | `llama-3.3-70b-versatile` (chat, quiz) | KHAI TỬ | `openai/gpt-oss-120b` |
+> | `llama-3.1-8b-instant` (rewrite, fallback) | KHAI TỬ | `openai/gpt-oss-20b` |
+>
+> Kèm theo đó, **TPM thật là 8.000 chứ không phải 12.000**, nên `AI_GLOBAL_TOKENS_PER_MINUTE`
+> đi từ 9.600 xuống 6.400, và `AI_MAX_OUTPUT_TOKENS` từ 400 lên 700 vì họ `gpt-oss` sinh
+> `reasoning_tokens` ẩn trừ vào hạn mức đó. Số hiện hành ở [SPEC §4.1](SPEC.md#41-ràng-buộc-cứng--groq-free-tier-8000-tokenphút-cho-model-chat).
+>
+> **Phần Embedding (§2) vẫn còn đúng nguyên** — chỉ phần LLM (§3 trở đi) là lỗi thời. Giữ lại
+> nguyên văn thay vì sửa lịch sử: nó là bản ghi của những gì đã đo được ngày 16/08/2026.
+
 ---
 
 ## Mục lục

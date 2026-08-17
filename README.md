@@ -10,9 +10,13 @@ từ phía Java ở [docs/BACKEND_INTEGRATION.md](docs/BACKEND_INTEGRATION.md).
 
 ## Nguyên tắc chi phối mọi thứ
 
-**Token LLM là tài nguyên đắt nhất.** Groq free tier cho 12.000 token mỗi phút; service
-chỉ dùng 9.600 (80%). Vì vậy mọi câu hỏi đều đi qua bộ lọc rẻ tiền trước, và chỉ những
-câu thật sự cần suy luận mới chạm tới LLM.
+**Token LLM là tài nguyên đắt nhất.** Groq free tier cho **8.000** token mỗi phút trên
+`openai/gpt-oss-*`; service chỉ dùng 6.400 (80%). Vì vậy mọi câu hỏi đều đi qua bộ lọc rẻ
+tiền trước, và chỉ những câu thật sự cần suy luận mới chạm tới LLM.
+
+> Con số 12.000 TPM ghi ở đây trước kia đo trên `llama-3.3-70b-versatile`, mà **model đó đã
+> bị Groq khai tử** (gọi vào trả `404 model_not_found`). Trên trần 8.000 thật thì ngân sách
+> 9.600 cũ không còn là biên an toàn mà là vượt trần 20%.
 
 | Nhánh | Token | Khi nào |
 |---|---|---|
@@ -202,10 +206,10 @@ Model hiện tại là **E5 bất đối xứng**: câu hỏi phải nối tiề
 Đổi thẳng trong `.env`, không cần làm gì thêm:
 
 ```bash
-AI_MODEL_CHAT=llama-3.3-70b-versatile     # chat chính
-AI_MODEL_REWRITE=llama-3.1-8b-instant     # viết lại câu hỏi, rẻ
-AI_MODEL_QUIZ=llama-3.3-70b-versatile     # sinh quiz, cần JSON mode
-AI_MODEL_FALLBACK=llama-3.1-8b-instant    # dùng khi ngân sách token gần cạn
+AI_MODEL_CHAT=openai/gpt-oss-120b         # chat chính
+AI_MODEL_REWRITE=openai/gpt-oss-20b       # viết lại câu hỏi, rẻ
+AI_MODEL_QUIZ=openai/gpt-oss-120b         # sinh quiz, cần JSON mode
+AI_MODEL_FALLBACK=openai/gpt-oss-20b      # dùng khi ngân sách token gần cạn
 ```
 
 Model quiz **bắt buộc hỗ trợ JSON mode**. Kiểm trước khi đổi — script đọc `GROQ_API_KEY`

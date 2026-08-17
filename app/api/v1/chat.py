@@ -235,7 +235,7 @@ lại chẳng có thẻ nào để lộ.
 
 `usage` chỉ đếm lời gọi sinh câu trả lời. Nếu lượt này có viết lại câu hỏi
 (`rewritten_query` khác `null`) thì đã tốn thêm khoảng 150 token của model
-`llama-3.1-8b-instant`, và số đó **không** xuất hiện ở đâu trong phản hồi.
+`openai/gpt-oss-20b`, và số đó **không** xuất hiện ở đâu trong phản hồi.
 
 Nghĩa là một lượt `DIRECT_LOOKUP` với `prompt_tokens = 0` vẫn có thể đã tiêu
 150 token cho bước viết lại. Muốn con số đầy đủ thì xem `GET /internal/v1/stats`,
