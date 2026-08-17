@@ -1631,38 +1631,31 @@ AI_DEMO_MODE=false                        # true: hạ ngưỡng cache xuống 0
 
 ### 13.1 Dockerfile
 
-```dockerfile
-FROM python:3.12-slim
+**File thật là [`../Dockerfile`](../Dockerfile), và nó mới là bản đúng.** Bản phác từng nằm ở
+đây đã bị xoá vì bốn dòng trong nó là **sai và hỏng âm thầm** — build vẫn xanh nên không có gì
+báo. Ghi lại để không ai chép lại chúng:
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    FASTEMBED_CACHE_PATH=/opt/fastembed_cache \
-    OMP_NUM_THREADS=1 \
-    ORT_NUM_THREADS=1
+| Bản phác cũ | Sai gì | File thật dùng |
+|---|---|---|
+| `RUN pip install --no-cache-dir uv` | PyPI trả 502 làm deploy Render chết ở bước thứ tư. `--no-cache-dir` khiến mọi lần thử lại tải lại từ đầu. Không ghim phiên bản nên có ngày `uv` không đọc nổi `uv.lock` `revision = 3` | `COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /usr/local/bin/uv` |
+| `uv sync --frozen --no-dev` | `--frozen` **không** kiểm `uv.lock` còn khớp `pyproject.toml` — nó chỉ dùng lock đang có. Lệch thì ảnh mang bộ thư viện khác máy dev, im lặng | `uv sync --locked --no-dev` |
+| `RUN uv run python scripts/download_model.py` | `uv run` tự đồng bộ lại môi trường và mặc định cài **cả nhóm `dev`** — kéo ngược pytest/ruff/mypy vào đúng cái `.venv` vừa dựng bằng `--no-dev` | `RUN /app/.venv/bin/python scripts/...` |
+| `--port 8000` cố định trong `CMD` | Render/Cloud Run/Heroku/Fly **tự đặt `$PORT`** và gõ health check vào cổng đó. Ghim cứng thì deploy bị coi là thất bại dù service chạy bình thường | `sh -c "exec ... --port ${PORT:-...}"` |
 
-WORKDIR /app
+Ngoài bốn dòng trên, file thật còn có ba thứ bản phác không có, mỗi thứ đều do một lỗi thật
+sinh ra: `app/core/preflight.py` chạy đầu tiên trong lifespan, một layer **tỉa từ vựng** (đỉnh
+RAM 538 → 317 MB, xem [DOCKER.md mục 13](DOCKER.md#13-ram-và-chọn-gói-hosting)), và
+`AI_ORT_INTRA_OP_THREADS=1` — `ORT_NUM_THREADS` mà bản phác đặt **không điều khiển ONNX
+Runtime**, xem mục 5.10.
 
-RUN pip install --no-cache-dir uv
+Ba quyết định vẫn giữ nguyên từ bản phác, và chúng là phần đáng đọc:
 
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
-
-# Nạp sẵn model vào image. KHÔNG tải lúc runtime —
-# cold start Railway mà phải tải 470 MB là hỏng.
-COPY scripts/download_model.py ./scripts/
-RUN uv run python scripts/download_model.py
-
-COPY app ./app
-COPY migrations ./migrations
-COPY tests/fixtures ./tests/fixtures
-
-EXPOSE 8000
-
-# 1 worker. Nhiều worker nghĩa là nhân bản model trong RAM
-# và chạy nhiều vòng lặp đồng bộ song song.
-CMD ["uv", "run", "uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
-```
+1. Model nạp **sẵn vào image** lúc build, không tải lúc runtime — cold start mà phải tải hàng
+   trăm MB thì container bị coi là chết trước khi kịp sống.
+2. Đúng **1 worker**. Nhiều worker là nhân bản model trong RAM và chạy nhiều vòng lặp đồng bộ
+   song song cùng ghi vào một file SQLite (mục 5.10 bẫy 3).
+3. Thứ tự `COPY` xếp theo **tần suất thay đổi**, thứ ít đổi nhất lên trước, để sửa một dòng
+   trong `app/` không làm mất layer model.
 
 ### 13.2 Railway
 

@@ -60,7 +60,31 @@ RUN useradd --create-home --uid 10001 fsoft \
     && mkdir -p /data \
     && chown fsoft:fsoft /data
 
-# Ghim phiên bản uv vì hai lý do, lý do thứ hai mới là lý do bắt buộc:
+# Lấy uv từ ảnh chính thức của Astral, KHÔNG cài qua pip.
+#
+# Trước đây dòng này là `pip install --no-cache-dir uv==0.12.1` và nó làm deploy
+# trên Render chết với:
+#
+#   Could not install packages due to an OSError: HTTPSConnectionPool(
+#   host='files.pythonhosted.org', port=443): Max retries exceeded ...
+#   (Caused by ResponseError('too many 502 error responses'))
+#
+# 502 là CDN của PyPI hỏng nhất thời, không phải lỗi cấu hình. Nhưng bước này
+# đứng TRƯỚC layer tải model, nên một lần PyPI nấc là mất trắng cả lần build —
+# biến mỗi lần deploy thành một lần xổ số. `--no-cache-dir` còn làm mọi lần thử
+# lại đều phải tải lại từ đầu.
+#
+# `COPY --from=<ảnh>` bỏ hẳn pip khỏi đường đi: đổi nguồn từ PyPI sang ghcr.io,
+# copy một tệp thay vì giải nén một wheel, và không tốn thêm byte nào trong ảnh
+# cuối (wheel `uv` trên PyPI vốn chỉ là bao bì quanh đúng binary này).
+#
+# Đã kiểm tag 0.12.1 trên ghcr.io: index có cả linux/amd64 lẫn linux/arm64 (nên
+# build cho ARM vẫn chạy, Docker tự chọn đúng kiến trúc), `/uv` + `/uvx` nằm ở
+# gốc ảnh với mode 755, và bản amd64 của `/uv` là ELF64 TĨNH HOÀN TOÀN — không
+# cần `ld-linux`, không có symbol glibc — nên nó chạy trong `python:3.12-slim`
+# (Debian) dù ảnh nguồn là distroless.
+#
+# Ghim phiên bản vì hai lý do, lý do thứ hai mới là lý do bắt buộc:
 #
 # 1. Không ghim thì hai lần build cách nhau vài tháng có thể ra hai môi trường
 #    khác nhau — đúng thứ mà uv.lock sinh ra để tránh.
@@ -68,9 +92,10 @@ RUN useradd --create-home --uid 10001 fsoft \
 #    định dạng đó và `uv sync` sẽ hỏng giữa lúc build. Con số dưới đây khớp bản
 #    đang dùng trên máy dev, tức bản đã sinh ra chính file lock này.
 #
-# Nâng uv thì kiểm lại `head -3 uv.lock` xem revision có đổi không.
-# Kiểm điều kiện của `--locked` ở dòng dưới bằng `uv lock --check`.
-RUN pip install --no-cache-dir uv==0.12.1
+# Nâng uv thì kiểm ba thứ: `head -3 uv.lock` xem revision có đổi không, tag mới
+# có thật trên ghcr.io/astral-sh/uv không, và `uv lock --check` (điều kiện của
+# `--locked` ở dòng dưới).
+COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /usr/local/bin/uv
 
 # ---------------------------------------------------------------------
 # Layer 1 — thư viện. Chỉ đổi khi pyproject.toml hoặc uv.lock đổi.

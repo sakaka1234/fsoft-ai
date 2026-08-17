@@ -1,9 +1,13 @@
 # Chạy fsoft-ai bằng Docker
 
-> **Chưa được build thử.** Máy viết ra bộ file này không cài được Docker, nên tôi đã bù bằng
+> **Không được build thử trên máy viết ra nó.** Máy đó không cài được Docker, nên tôi bù bằng
 > cách đối chiếu từng dòng với code thật thay vì chạy thử. Mục [10](#10-những-gì-chưa-được-kiểm-chứng)
-> nói rõ chỗ nào là chắc chắn và chỗ nào là suy luận. Lần build đầu tiên, nếu vấp lỗi thì
-> chụp lại thông báo — mục [9](#9-gặp-lỗi-thì-tra-ở-đây) đã liệt kê sẵn những lỗi dễ gặp nhất.
+> nói rõ chỗ nào là chắc chắn và chỗ nào là suy luận.
+>
+> Đã có build thật ở nơi khác, và **bốn lỗi đầu tiên đều đã gặp ngoài thực tế** — cả bốn nằm ở
+> mục [11b](#11b-triển-khai-lên-render--và-bốn-lỗi-chắc-chắn-gặp) kèm nguyên văn thông báo.
+> Vấp lỗi khác thì chụp lại thông báo; mục [9](#9-gặp-lỗi-thì-tra-ở-đây) liệt kê sẵn những lỗi
+> dễ gặp nhất.
 
 ---
 
@@ -212,6 +216,20 @@ Tên volume thật có tiền tố là tên thư mục dự án. Xem bằng `doc
 
 Bạn quên bước `cp .env.example .env`.
 
+### Build dừng ở bước lấy `uv`
+
+Thông báo có `ghcr.io` hoặc `astral-sh/uv`: không lấy được binary `uv`. Chạy lại trước đã —
+gần như luôn là mạng nấc một nhịp. Nếu ở chỗ bạn ghcr.io bị chặn hẳn thì đổi dòng
+`COPY --from=ghcr.io/astral-sh/uv:0.12.1 ...` trong `Dockerfile` về đường PyPI:
+
+```dockerfile
+RUN pip install --retries 10 --timeout 60 uv==0.12.1
+```
+
+Đừng thêm `--no-cache-dir` như bản cũ: nó làm mỗi lần thử lại phải tải lại từ đầu. Và biết
+trước rằng đường này kém tin cậy hơn — chính nó đã làm deploy trên Render chết với
+`too many 502 error responses` từ `files.pythonhosted.org`, xem [mục 11b](#lỗi-4--could-not-install-packages-due-to-an-oserror--too-many-502-error-responses).
+
 ### Build dừng ở `uv sync --locked`
 
 Hai nguyên nhân, phân biệt bằng thông báo:
@@ -268,7 +286,7 @@ Tìm `warmup_failed` trong log. `warmup` chạy ở task nền nên nó hỏng m
 xuống — nền tảng vẫn thấy cổng có người nghe và kết luận là thành công.
 
 Nguyên nhân hay gặp nhất là `FASTEMBED_CACHE_PATH` sai, xem
-[mục 11b](#11b-triển-khai-lên-render--và-ba-lỗi-chắc-chắn-gặp). Từ bản mới preflight bắt được
+[mục 11b](#11b-triển-khai-lên-render--và-bốn-lỗi-chắc-chắn-gặp). Từ bản mới preflight bắt được
 trường hợp này ngay lúc khởi động.
 
 ### Deploy bị coi là thất bại dù log không có lỗi
@@ -309,20 +327,32 @@ Nói thẳng để bạn biết chỗ nào cần để mắt ở lần chạy đ
 - `app/store/db.py` tự tạo thư mục cha của file SQLite, nên `/data/fsoft-ai.db` không cần
   chuẩn bị trước.
 - Câu lệnh Python một dòng trong `HEALTHCHECK` chạy đúng cú pháp.
-- `uv==0.12.1` có thật trên PyPI và đọc được `uv.lock` `revision = 3` của repo này.
+- Tag `0.12.1` có thật trên `ghcr.io/astral-sh/uv`, và index của nó có **cả `linux/amd64` lẫn
+  `linux/arm64`** — nên đường Oracle Cloud ARM ở mục 13 vẫn dùng được, Docker tự chọn đúng
+  kiến trúc. Ảnh đó chứa `/uv` + `/uvx` ở gốc với mode 755, và `/uv` là ELF64 x86-64
+  **tĩnh hoàn toàn**
+  (không có `ld-linux-x86-64.so.2`, không có symbol `GLIBC_`) nên chạy được trong
+  `python:3.12-slim`. Bản `uv` này đọc được `uv.lock` `revision = 3` của repo — nó chính là
+  bản đã sinh ra file lock đó trên máy dev.
 - `.dockerignore` không loại nhầm thứ nào mà Dockerfile `COPY` tới. Ba thứ nặng nhất
   (`.cache` 486 MB, `.venv` 250 MB, `.mypy_cache` 47 MB) đều đã bị loại; mọi thứ còn lại ở
   gốc repo đều ≤ 2 MB.
 
 **Chưa kiểm chứng được — cần Docker thật:**
 
-- Thời gian build và dung lượng ảnh cuối (ước lượng 1,3 GB).
+- Thời gian build và dung lượng ảnh cuối. Một lần build thật trên Docker Desktop (bản fp32,
+  trước khi lượng tử hoá và tỉa) cho **881,5 MB** — thấp hơn con số ước lượng 1,3 GB đã ghi ở
+  đây trước đó. Ảnh hiện tại nhẹ hơn nữa vì model trong cache đi từ 448 MB xuống 66 MB, nhưng
+  chưa đo lại.
 - Quyền ghi vào volume `/data` khi chạy bằng user `fsoft` (uid 10001). Theo tài liệu Docker,
   volume **có tên** kế thừa quyền của thư mục trong image nên phải chạy đúng; nhưng nếu bạn
   đổi sang **bind mount** thì quyền của host thắng và có thể gặp `Permission denied`.
-- RSS thật trong container Linux. Con số 504 MB ở mục 13 đo trên Windows; container Linux
-  với bản fp32 trước đó cho 881,5 MB so với 893,5 MB trên Windows, tức Linux thấp hơn khoảng
-  12 MB — nên dự kiến khoảng 492 MB, nhưng chưa xác nhận.
+- RSS thật trong container Linux. Mọi con số ở mục 13 (đỉnh **317 MB** cho bản mặc định) đều
+  đo trên Windows bằng `PeakWorkingSetSize`. Linux thường thấp hơn một chút, nhưng đừng lập kế
+  hoạch dung lượng dựa vào phần "thấp hơn" đó — hãy lấy 317 MB làm số.
+- **Bước tỉa từ vựng trong `Dockerfile` chưa từng chạy trong một image thật.** Nó chạy đúng
+  trên máy dev bằng cùng interpreter và cùng câu lệnh, nhưng lần build đầu là lần đầu nó chạy
+  trong container. Vấp ở đó thì log chỉ thẳng vào dòng `scripts/tia_vocab.py`.
 - `docker compose` có nhận `mem_limit`/`cpus` ở cấp service hay cảnh báo bỏ qua — tuỳ phiên
   bản Compose.
 
@@ -357,7 +387,7 @@ lại model 470 MB mỗi lần**, mất vài giây.
 
 ---
 
-## 11b. Triển khai lên Render — và ba lỗi chắc chắn gặp
+## 11b. Triển khai lên Render — và bốn lỗi chắc chắn gặp
 
 Render chỉ đọc `Dockerfile`, **không đọc `docker-compose.yml`**. Nghĩa là khối `environment:`
 đè đường dẫn trong compose không hề có tác dụng, và bạn phải tự đặt biến trong bảng điều
@@ -403,17 +433,44 @@ liên quan sai âm thầm** — 2 trong 5 case NEGATIVE trả về thẻ bừa t
 
 Sửa: `AI_MIN_SCORE=0.8344`.
 
+### Lỗi 4 — `Could not install packages due to an OSError` … `too many 502 error responses`
+
+Toàn văn, xảy ra ở bước `[4/14]` tức rất sớm trong build:
+
+```
+ERROR: Could not install packages due to an OSError: HTTPSConnectionPool(
+  host='files.pythonhosted.org', port=443): Max retries exceeded with url:
+  /packages/.../uv-0.12.1-py3-none-manylinux_2_17_x86_64...whl.metadata
+  (Caused by ResponseError('too many 502 error responses'))
+error: failed to solve: process "/bin/sh -c pip install --no-cache-dir uv==0.12.1"
+  did not complete successfully: exit code: 1
+```
+
+**Đây không phải lỗi của bạn và không phải lỗi cấu hình.** 502 là CDN của PyPI hỏng nhất
+thời — `pip` đã tự thử lại và vẫn thua. Deploy lại lần nữa thường là xong.
+
+Nhưng nó lộ ra một điểm yếu thật trong `Dockerfile`, nên **bản mới đã sửa để không còn dựa vào
+PyPI**: `uv` giờ lấy từ ảnh chính thức của Astral trên ghcr.io.
+
+```dockerfile
+COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /usr/local/bin/uv
+```
+
+Vì sao đổi thay vì chỉ thêm `--retries`: bước này đứng **trước** layer tải model 118 MB, nên
+một nhịp nấc của PyPI làm mất trắng cả lần build. Cộng thêm `--no-cache-dir` khiến mọi lần thử
+lại phải tải lại từ đầu. Đổi sang `COPY --from` bỏ luôn `pip` khỏi đường đi, và **không tốn
+thêm byte nào** trong ảnh cuối vì wheel `uv` trên PyPI vốn chỉ là bao bì quanh đúng binary đó.
+
+Nếu ghcr.io bị chặn ở nơi bạn build thì quay về đường PyPI, xem
+[mục 9](#build-dừng-ở-bước-lấy-uv).
+
 ### Bộ biến tối thiểu cho Render
 
-Đừng dán cả `.env`. Chỉ đặt đúng những biến này:
+Đừng dán cả `.env`. Chỉ đặt đúng bốn biến này:
 
 ```
 AI_DB_PATH=/data/fsoft-ai.db
 FASTEMBED_CACHE_PATH=/opt/fastembed_cache
-AI_EMBEDDING_MODEL_FILE=onnx/model_qint8_avx512_vnni.onnx
-AI_MIN_SCORE=0.8344
-AI_MODEL_VERSION=multilingual-e5-small-q8@t1
-AI_ONNX_CPU_ARENA=false
 
 AI_INTERNAL_TOKEN=<chuỗi ngẫu nhiên 64 ký tự>
 AI_LLM_API_KEY=<khoá Groq, để trống nếu chỉ cần ba nhánh 0 token>
@@ -421,11 +478,31 @@ AI_LLM_API_KEY=<khoá Groq, để trống nếu chỉ cần ba nhánh 0 token>
 AI_SOURCE_MODE=fixture
 ```
 
-Ba biến đầu tiên trùng với `ENV` trong `Dockerfile` nên **không đặt cũng được** — nhưng đặt
-tường minh thì đọc bảng biến là biết ngay service đang chạy cấu hình nào.
+Hai biến đầu trùng với `ENV` trong `Dockerfile` nên **không đặt cũng được** — nhưng đặt tường
+minh thì đọc bảng biến là biết ngay service đang chạy cấu hình nào.
 
-**Nguy hiểm nhất là đặt chúng SAI**, vì biến của nền tảng đè lên `ENV` của image. Hai giá trị
-tuyệt đối không được dùng ở đây, dù chúng đúng trên máy dev:
+> **NẾU BẠN ĐÃ TỪNG DEPLOY THEO BẢN CŨ CỦA MỤC NÀY, VÀO XOÁ BỐN BIẾN SAU.**
+>
+> Bản trước của tài liệu này bảo đặt tường minh cả cụm cấu hình model:
+>
+> ```
+> AI_EMBEDDING_MODEL_FILE=onnx/model_qint8_avx512_vnni.onnx   <- xoá
+> AI_MODEL_VERSION=multilingual-e5-small-q8@t1                <- xoá
+> AI_MIN_SCORE=0.8344                                         <- xoá
+> AI_ONNX_CPU_ARENA=false                                     <- xoá
+> ```
+>
+> Cả bốn giá trị đó **vẫn đúng cú pháp và không gây lỗi nào**, nên không có gì báo cho bạn
+> biết. Nhưng biến của nền tảng đè lên mặc định của code, và biến thứ nhất trỏ vào bản
+> **chưa tỉa từ vựng**. Hậu quả: ảnh mới có sẵn model đã tỉa nhưng service vẫn nạp bản cũ,
+> đỉnh RAM quay về **538 MB**, Render free OOM thành vòng lặp chết — y như trước khi tỉa.
+>
+> Bỏ trống cả bốn thì code tự lấy mặc định đã khớp nhau: `onnx/model_tia113k.onnx`,
+> `e5-small-q8-tia113k@t1`, `0.8344`, `false`. Ba biến sau chỉ tồn tại trong bảng cũ vì
+> **phải** đi kèm biến thứ nhất — mặc định của code nay đã là chúng.
+
+**Nguy hiểm nhất là đặt biến SAI**, chứ không phải thiếu biến, vì biến của nền tảng đè lên
+`ENV` của image. Hai giá trị tuyệt đối không được dùng ở đây, dù chúng đúng trên máy dev:
 
 ```
 AI_DB_PATH=./data/fsoft-ai.db            <- SAI, giải ra /app/data
