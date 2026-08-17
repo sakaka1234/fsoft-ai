@@ -180,7 +180,10 @@ def test_preflight_bao_HET_moi_duong_dan_sai_trong_mot_lan(monkeypatch) -> None:
 
     from app.core import preflight
 
+    # Không ghi được ở đâu cả, và cache cũng chưa có model — đúng tình huống
+    # container với đường dẫn tương đối.
     monkeypatch.setattr(preflight.os, "access", lambda *_a, **_k: False)
+    monkeypatch.setattr(preflight, "_co_model_trong_cache", lambda *_a, **_k: False)
 
     settings = Settings(
         ai_db_path=Path("./data/fsoft-ai.db"),
@@ -230,3 +233,70 @@ def test_preflight_bao_fixture_thieu_chi_khi_dang_dung_fixture(tmp_path: Path) -
     kiem_duong_dan(
         Settings(ai_source_mode="http", ai_fixture_path=thieu, ai_db_path=tmp_path / "a.db")
     )
+
+
+def test_cache_model_chi_doc_van_hop_le(tmp_path: Path, monkeypatch) -> None:
+    """
+    Hồi quy từ deploy Render thật.
+
+    Trong image, `/opt/fastembed_cache` được tạo lúc build bằng `root` (bước tải
+    model chạy trước `USER fsoft`), nên user chạy service chỉ ĐỌC được. Thế là
+    đủ — model đã nằm sẵn ở đó, không ai cần ghi thêm.
+
+    Bản preflight đầu tiên đòi quyền GHI vô điều kiện nên nó chặn luôn cấu hình
+    ĐÚNG, và câu "sửa:" lại bảo đặt đúng cái giá trị đang đặt — một thông báo tự
+    mâu thuẫn, tệ hơn cả không có thông báo.
+    """
+
+    from app.core import preflight
+
+    cache = tmp_path / "fastembed_cache"
+    cache.mkdir()
+
+    # Cache có model. Chặn quyền ghi CHỈ trên thư mục cache, để đường dẫn DB
+    # trong test vẫn hợp lệ — chặn tất thì test sẽ đỏ vì một lý do khác.
+    monkeypatch.setattr(preflight, "_co_model_trong_cache", lambda *_a, **_k: True)
+
+    access_that = preflight.os.access
+
+    def access_gia(duong_dan, mode):
+        if Path(duong_dan) == cache:
+            return mode != preflight.os.W_OK
+
+        return access_that(duong_dan, mode)
+
+    monkeypatch.setattr(preflight.os, "access", access_gia)
+
+    preflight.kiem_duong_dan(
+        Settings(
+            fastembed_cache_path=cache,
+            ai_db_path=tmp_path / "data" / "x.db",
+            ai_source_mode="http",
+        )
+    )
+
+
+def test_cache_rong_va_khong_ghi_duoc_thi_moi_la_loi(tmp_path: Path, monkeypatch) -> None:
+    """Không có model VÀ không tải về được — lúc đó mới thật sự chặn được đường."""
+
+    from app.core import preflight
+
+    cache = tmp_path / "fastembed_cache"
+    cache.mkdir()
+
+    monkeypatch.setattr(preflight, "_co_model_trong_cache", lambda *_a, **_k: False)
+    monkeypatch.setattr(preflight.os, "access", lambda *_a, **_k: False)
+
+    with pytest.raises(RuntimeError) as thong_tin:
+        preflight.kiem_duong_dan(
+            Settings(
+                fastembed_cache_path=cache,
+                ai_db_path=tmp_path / "data" / "x.db",
+                ai_source_mode="http",
+            )
+        )
+
+    loi = str(thong_tin.value)
+
+    assert "FASTEMBED_CACHE_PATH" in loi
+    assert "KHÔNG có model" in loi

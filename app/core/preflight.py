@@ -68,6 +68,17 @@ def _ghi_duoc(thu_muc: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def _co_model_trong_cache(settings: Settings, cache: Path) -> bool:
+    """Cache đã chứa ĐÚNG biến thể ONNX đang cấu hình chưa."""
+
+    from app.embedding.encoder import find_local_snapshot
+
+    return (
+        find_local_snapshot(cache, settings.ai_embedding_model, settings.ai_embedding_model_file)
+        is not None
+    )
+
+
 def kiem_duong_dan(settings: Settings) -> None:
     """
     Ném `RuntimeError` liệt kê mọi đường dẫn có vấn đề.
@@ -103,18 +114,43 @@ def kiem_duong_dan(settings: Settings) -> None:
             f"      sửa: dùng AI_SOURCE_MODE=http, hoặc trỏ vào tệp có thật"
         )
 
-    # ---- Cache model: chỗ đã làm hỏng deploy lần thứ hai ----
+    # ---- Cache model ----
+    #
+    # Yêu cầu quyền phụ thuộc vào việc model CÓ SẴN hay chưa, và đây là chỗ bản
+    # trước làm sai: nó đòi quyền GHI vô điều kiện, nên chặn luôn cấu hình đúng.
+    #
+    # Trong image, /opt/fastembed_cache được tạo lúc build bằng root (bước
+    # download_model.py chạy trước `USER fsoft`), nên user chạy service chỉ ĐỌC
+    # được. Thế là đủ: model đã nằm sẵn ở đó, không ai cần ghi thêm. fastembed
+    # cũng chỉ gọi `mkdir(exist_ok=True)` nên thư mục có sẵn thì không cần ghi.
+    #
+    # Chỉ khi cache RỖNG thì mới cần ghi — vì lúc đó phải tải model về.
     if settings.fastembed_cache_path is not None:
-        cache = settings.fastembed_cache_path
-        duoc, ly_do = _ghi_duoc(cache)
+        cache = resolve_path(settings.fastembed_cache_path)
+        co_san_model = _co_model_trong_cache(settings, cache)
 
-        if not duoc:
-            van_de.append(
-                f"FASTEMBED_CACHE_PATH={cache}\n"
-                f"      {ly_do}\n"
-                f"      sửa: FASTEMBED_CACHE_PATH=/opt/fastembed_cache "
-                f"(đây là chỗ model đã được nạp sẵn lúc build image)"
-            )
+        if co_san_model:
+            # Cần cả R_OK lẫn X_OK: thiếu quyền "search" trên thư mục thì không
+            # mở nổi tệp bên trong dù có quyền đọc chính thư mục.
+            if not os.access(cache, os.R_OK | os.X_OK):
+                van_de.append(
+                    f"FASTEMBED_CACHE_PATH={settings.fastembed_cache_path}  (giải ra {cache})\n"
+                    f"      có model nhưng KHÔNG đọc được\n"
+                    f"      sửa: cấp quyền đọc cho thư mục này"
+                )
+
+        else:
+            duoc, ly_do = _ghi_duoc(cache)
+
+            if not duoc:
+                van_de.append(
+                    f"FASTEMBED_CACHE_PATH={settings.fastembed_cache_path}  (giải ra {cache})\n"
+                    f"      KHÔNG có model {settings.ai_embedding_model_file} ở đây, "
+                    f"và cũng không tải về được: {ly_do}\n"
+                    f"      sửa: trong container dùng FASTEMBED_CACHE_PATH=/opt/fastembed_cache "
+                    f"(model đã nạp sẵn lúc build image); ngoài container thì trỏ vào một "
+                    f"thư mục ghi được"
+                )
 
     if not van_de:
         return
@@ -142,15 +178,7 @@ def canh_bao_model_khong_co_san(settings: Settings) -> None:
     if settings.fastembed_cache_path is None:
         return
 
-    from app.embedding.encoder import find_local_snapshot
-
-    snapshot = find_local_snapshot(
-        settings.fastembed_cache_path.resolve(),
-        settings.ai_embedding_model,
-        settings.ai_embedding_model_file,
-    )
-
-    if snapshot is None:
+    if not _co_model_trong_cache(settings, resolve_path(settings.fastembed_cache_path)):
         log.warning(
             "model_khong_co_san_trong_cache",
             cache_path=str(settings.fastembed_cache_path),
