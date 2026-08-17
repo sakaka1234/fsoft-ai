@@ -4,8 +4,9 @@
 > cách đối chiếu từng dòng với code thật thay vì chạy thử. Mục [10](#10-những-gì-chưa-được-kiểm-chứng)
 > nói rõ chỗ nào là chắc chắn và chỗ nào là suy luận.
 >
-> Đã có build thật ở nơi khác, và **bốn lỗi đầu tiên đều đã gặp ngoài thực tế** — cả bốn nằm ở
-> mục [11b](#11b-triển-khai-lên-render--và-bốn-lỗi-chắc-chắn-gặp) kèm nguyên văn thông báo.
+> Đã có build thật ở nơi khác, và **cả năm lỗi ở mục 11b đều đã gặp ngoài thực tế** — mỗi lỗi
+> kèm nguyên văn thông báo, xem mục
+> [11b](#11b-triển-khai-lên-render--và-năm-lỗi-chắc-chắn-gặp).
 > Vấp lỗi khác thì chụp lại thông báo; mục [9](#9-gặp-lỗi-thì-tra-ở-đây) liệt kê sẵn những lỗi
 > dễ gặp nhất.
 
@@ -286,7 +287,7 @@ Tìm `warmup_failed` trong log. `warmup` chạy ở task nền nên nó hỏng m
 xuống — nền tảng vẫn thấy cổng có người nghe và kết luận là thành công.
 
 Nguyên nhân hay gặp nhất là `FASTEMBED_CACHE_PATH` sai, xem
-[mục 11b](#11b-triển-khai-lên-render--và-bốn-lỗi-chắc-chắn-gặp). Từ bản mới preflight bắt được
+[mục 11b](#11b-triển-khai-lên-render--và-năm-lỗi-chắc-chắn-gặp). Từ bản mới preflight bắt được
 trường hợp này ngay lúc khởi động.
 
 ### Deploy bị coi là thất bại dù log không có lỗi
@@ -387,7 +388,7 @@ lại model 470 MB mỗi lần**, mất vài giây.
 
 ---
 
-## 11b. Triển khai lên Render — và bốn lỗi chắc chắn gặp
+## 11b. Triển khai lên Render — và năm lỗi chắc chắn gặp
 
 Render chỉ đọc `Dockerfile`, **không đọc `docker-compose.yml`**. Nghĩa là khối `environment:`
 đè đường dẫn trong compose không hề có tác dụng, và bạn phải tự đặt biến trong bảng điều
@@ -463,6 +464,47 @@ thêm byte nào** trong ảnh cuối vì wheel `uv` trên PyPI vốn chỉ là b
 
 Nếu ghcr.io bị chặn ở nơi bạn build thì quay về đường PyPI, xem
 [mục 9](#build-dừng-ở-bước-lấy-uv).
+
+### Lỗi 5 — build xanh, "Your service is live", rồi 502 lặp lại mãi
+
+Triệu chứng chính xác, quan sát bằng cách gọi liên tục:
+
+```
+/healthz  200        /readyz  503  {"ready":false,"encoder_ready":true,"index_ready":false}
+/healthz  200        /readyz  503  ... khoảng 30 giây ...
+/healthz  502        /readyz  502  ... rồi lặp lại từ đầu sau vài phút
+```
+
+Đây là **OOM**, không phải lỗi trong code. Ba dấu hiệu để chắc:
+
+1. `encoder_ready=true` — model nạp xong, nên không phải lỗi đường dẫn hay tệp hỏng.
+2. `index_ready=false` mãi — nó chết ở giữa `intent_classifier.warmup()` và
+   `load_index_from_db()`, tức đúng lúc chạy lô embedding đầu tiên, tức đúng đỉnh RAM.
+3. `502` chứ không phải `503` đứng mãi — **tiến trình biến mất**. Nếu là một exception thường
+   thì `warmup` đã bắt, ghi `warmup_failed`, và service **vẫn sống** với `/readyz` 503 vĩnh
+   viễn. Không có traceback nào là dấu hiệu của cgroup: kernel giết thẳng, không báo ai.
+
+Nguyên nhân hay gặp nhất **không phải** RAM thật sự không đủ, mà là **một biến cũ còn sót
+trong bảng điều khiển** trỏ vào biến thể ONNX nặng hơn — xem cảnh báo ở
+[bộ biến tối thiểu](#bộ-biến-tối-thiểu-cho-render) ngay dưới.
+
+**Từ bản này, log nói thẳng ra.** Dòng đầu tiên khi khởi động là cấu hình đang có hiệu lực,
+kèm danh sách field nào bị biến môi trường đè:
+
+```json
+{"event":"cau_hinh_hieu_luc","model_file":"onnx/model_qint8_avx512_vnni.onnx",
+ "dat_tu_moi_truong":["ai_embedding_model_file","ai_min_score",...]}
+{"event":"ram_container","gioi_han_MB":512,"dinh_du_kien_MB":538}
+{"event":"ram_co_the_khong_du","level":"warning","bi_de_boi_moi_truong":true,
+ "goi_y":"bỏ hẳn AI_EMBEDDING_MODEL_FILE khỏi bảng biến của nền tảng ..."}
+```
+
+`gioi_han_MB` đọc từ cgroup của chính container, không phải RAM của máy chủ. Đối chiếu với
+đỉnh đo được của biến thể đang cấu hình. Đây là **cảnh báo, không chặn deploy** — con số đỉnh
+đo trên máy khác nên không đáng để chặn, nhưng đáng để in ra.
+
+Tìm ba dòng đó trong log Render. Không thấy dòng nào cả nghĩa là tiến trình chết trước cả
+lifespan, lúc đó xem lại `Events` của Render — nó ghi riêng sự kiện hết bộ nhớ.
 
 ### Bộ biến tối thiểu cho Render
 

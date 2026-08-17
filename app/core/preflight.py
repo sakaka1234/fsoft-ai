@@ -165,6 +165,127 @@ def kiem_duong_dan(settings: Settings) -> None:
     raise RuntimeError(thong_bao)
 
 
+# Nơi cgroup công bố giới hạn bộ nhớ. Là hằng số ở cấp module để test thay được
+# bằng tệp tạm — hai đường dẫn này không tồn tại trên Windows lẫn macOS.
+TEP_GIOI_HAN_RAM = (
+    # cgroup v2 — Docker mới, Render, Fly, Cloud Run.
+    Path("/sys/fs/cgroup/memory.max"),
+    # cgroup v1 — nhân cũ. Không có giới hạn thì ghi một số khổng lồ.
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+
+
+def gioi_han_ram_container() -> int | None:
+    """
+    Giới hạn bộ nhớ mà cgroup áp lên tiến trình, MB. `None` nếu không có.
+
+    Đọc trực tiếp từ cgroup chứ không hỏi tổng RAM của máy: trên Render và mọi
+    PaaS khác, máy có hàng chục GB nhưng container chỉ được cấp 512 MB, và cái
+    giết tiến trình là con số thứ hai.
+    """
+
+    for tep in TEP_GIOI_HAN_RAM:
+        try:
+            noi_dung = tep.read_text().strip()
+
+        except OSError:
+            continue
+
+        if noi_dung == "max":
+            return None
+
+        try:
+            byte = int(noi_dung)
+
+        except ValueError:
+            continue
+
+        # cgroup v1 dùng ~2^63 để nói "không giới hạn". Bất cứ giá trị trên 1 TB
+        # đều là cách nói đó, không phải một giới hạn thật.
+        if byte <= 0 or byte > 1024**4:
+            return None
+
+        return byte // (1024 * 1024)
+
+    return None
+
+
+def log_cau_hinh_hieu_luc(settings: Settings) -> None:
+    """
+    In cấu hình ĐANG CÓ HIỆU LỰC, đánh dấu cái nào bị biến môi trường đè lên.
+
+    Vì sao cần: nền tảng hosting đè biến lên mặc định của code, và một biến cũ
+    còn sót trong bảng điều khiển sẽ âm thầm thắng. Cụ thể đã xảy ra:
+    `AI_EMBEDDING_MODEL_FILE` còn trỏ vào bản CHƯA tỉa từ vựng, nên ảnh mới có
+    sẵn model đã tỉa mà service vẫn nạp bản cũ, đỉnh RAM quay về 538 MB và
+    Render free OOM thành vòng lặp chết. Không có gì trong log nói ra điều đó —
+    kể cả tôi, khi đi chẩn đoán, cũng không có cách nào biết.
+
+    Gọi TRƯỚC `kiem_duong_dan` để ngay cả một preflight thất bại cũng có dòng
+    cấu hình đứng phía trên nó.
+
+    `model_fields_set` của pydantic là chỗ chứa sự thật: nó chỉ gồm những field
+    được đặt tường minh (biến môi trường hoặc `.env`), không gồm mặc định.
+    """
+
+    from app.embedding.encoder import DINH_RAM_MB_THEO_MODEL
+
+    dat_tu_moi_truong = sorted(settings.model_fields_set)
+
+    log.info(
+        "cau_hinh_hieu_luc",
+        source_mode=settings.ai_source_mode,
+        model_file=settings.ai_embedding_model_file,
+        model_version=settings.ai_model_version,
+        min_score=settings.ai_min_score,
+        embed_batch_size=settings.ai_embed_batch_size,
+        onnx_cpu_arena=settings.ai_onnx_cpu_arena,
+        ort_intra_op_threads=settings.ai_ort_intra_op_threads,
+        db_path=str(resolve_path(settings.ai_db_path)),
+        cache_path=(
+            str(resolve_path(settings.fastembed_cache_path))
+            if settings.fastembed_cache_path is not None
+            else None
+        ),
+        dat_tu_moi_truong=dat_tu_moi_truong,
+    )
+
+    # ---- Đỉnh RAM dự kiến so với giới hạn thật ----
+    dinh_du_kien = DINH_RAM_MB_THEO_MODEL.get(settings.ai_embedding_model_file)
+    gioi_han = gioi_han_ram_container()
+
+    if dinh_du_kien is None or gioi_han is None:
+        return
+
+    log.info("ram_container", gioi_han_MB=gioi_han, dinh_du_kien_MB=dinh_du_kien)
+
+    # Ngưỡng 90%: đỉnh đo được dao động tới 38 MB giữa hai lần chạy, nên "vừa
+    # khít" trên giấy nghĩa là thỉnh thoảng vượt trong thực tế.
+    if dinh_du_kien <= gioi_han * 0.9:
+        return
+
+    nhe_nhat = min(DINH_RAM_MB_THEO_MODEL, key=lambda x: DINH_RAM_MB_THEO_MODEL[x])
+
+    # CẢNH BÁO, không phải lỗi: con số đỉnh đo trên máy khác, và chặn deploy dựa
+    # trên một phép ước lượng thì tệ hơn để nó chạy rồi xem thật.
+    log.warning(
+        "ram_co_the_khong_du",
+        gioi_han_MB=gioi_han,
+        dinh_du_kien_MB=dinh_du_kien,
+        model_file=settings.ai_embedding_model_file,
+        bi_de_boi_moi_truong="ai_embedding_model_file" in settings.model_fields_set,
+        hau_qua=(
+            "cgroup giết tiến trình mà KHÔNG sinh traceback: service báo live, "
+            "/readyz cho encoder_ready=true index_ready=false một lúc, rồi 502, rồi lặp lại"
+        ),
+        goi_y=(
+            f"bỏ hẳn AI_EMBEDDING_MODEL_FILE khỏi bảng biến của nền tảng để dùng mặc định "
+            f"{nhe_nhat} ({DINH_RAM_MB_THEO_MODEL[nhe_nhat]} MB), và bỏ luôn AI_MIN_SCORE, "
+            f"AI_MODEL_VERSION, AI_ONNX_CPU_ARENA vì mặc định đã khớp nhau"
+        ),
+    )
+
+
 def canh_bao_model_khong_co_san(settings: Settings) -> None:
     """
     Cảnh báo khi cache không chứa biến thể ONNX đang cấu hình.

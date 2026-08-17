@@ -80,6 +80,26 @@ MIN_SCORE_THEO_MODEL = {
     "onnx/model_tia113k.onnx": 0.8344,
 }
 
+# Đỉnh RSS mỗi biến thể, MB — lấy đầu CAO của dải trong bảng đầu file.
+#
+# Dùng để CẢNH BÁO lúc khởi động, không dùng để rẽ nhánh: `app/core/preflight.py`
+# đối chiếu con số này với giới hạn bộ nhớ thật của container rồi nói trước rằng
+# cấu hình hiện tại sẽ OOM.
+#
+# Vì sao cần: OOM do cgroup KHÔNG sinh ra log nào trong tiến trình — kernel giết
+# thẳng. Trên Render, biểu hiện là service báo "live", `/readyz` trả
+# `encoder_ready=true, index_ready=false` chừng ba chục giây, rồi 502, rồi lặp
+# lại mãi. Không có traceback, không có gì để tra. Đã mất hai vòng deploy vào
+# đúng cảnh đó, nên thà đoán rồi in ra còn hơn im lặng.
+#
+# Đo trên Windows nên coi là XẤP XỈ. Đừng biến nó thành điều kiện chặn deploy.
+DINH_RAM_MB_THEO_MODEL = {
+    "onnx/model.onnx": 936,
+    "onnx/model_O4.onnx": 697,
+    "onnx/model_qint8_avx512_vnni.onnx": 538,
+    "onnx/model_tia113k.onnx": 317,
+}
+
 
 def _is_registered(model_name: str) -> bool:
     return any(item.get("model") == model_name for item in TextEmbedding.list_supported_models())

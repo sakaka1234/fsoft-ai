@@ -300,3 +300,203 @@ def test_cache_rong_va_khong_ghi_duoc_thi_moi_la_loi(tmp_path: Path, monkeypatch
 
     assert "FASTEMBED_CACHE_PATH" in loi
     assert "KHÔNG có model" in loi
+
+
+# ---------------------------------------------------------------------
+# Log cấu hình hiệu lực
+#
+# Vì sao có nhóm test này: một biến cũ sót trong bảng điều khiển của nền tảng
+# hosting đè lên mặc định của code và KHÔNG có gì trong log nói ra. Cụ thể đã xảy
+# ra: `AI_EMBEDDING_MODEL_FILE` còn trỏ vào bản chưa tỉa từ vựng, nên ảnh mới có
+# sẵn model đã tỉa mà service vẫn nạp bản cũ, đỉnh RAM quay về 538 MB và Render
+# free OOM thành vòng lặp chết. cgroup giết tiến trình không sinh traceback nên
+# không có gì để tra.
+# ---------------------------------------------------------------------
+
+
+class _LogGia:
+    """Ghi lại lời gọi log. Đơn giản hơn `structlog.testing.capture_logs`, mà
+    `capture_logs` lại không đáng tin ở đây vì `configure_logging` bật
+    `cache_logger_on_first_use=True`."""
+
+    def __init__(self) -> None:
+        self.su_kien: list[tuple[str, str, dict]] = []
+
+    def info(self, ten: str, **truong) -> None:
+        self.su_kien.append(("info", ten, truong))
+
+    def warning(self, ten: str, **truong) -> None:
+        self.su_kien.append(("warning", ten, truong))
+
+    def truong_cua(self, ten: str) -> dict | None:
+        for _, ten_su_kien, truong in self.su_kien:
+            if ten_su_kien == ten:
+                return truong
+
+        return None
+
+    def co(self, ten: str) -> bool:
+        return self.truong_cua(ten) is not None
+
+
+@pytest.fixture
+def log_gia(monkeypatch) -> _LogGia:
+    from app.core import preflight
+
+    gia = _LogGia()
+    monkeypatch.setattr(preflight, "log", gia)
+
+    return gia
+
+
+@pytest.fixture
+def moi_truong_sach(monkeypatch):
+    """
+    Dọn mọi biến `AI_*`/`FASTEMBED_*` khỏi môi trường tiến trình.
+
+    Cần vì `Settings` đọc cả `.env` của máy dev lẫn biến môi trường, nên trên máy
+    có `.env` thì `model_fields_set` gồm gần như MỌI field — và test "field nào bị
+    đè" sẽ xanh hay đỏ tuỳ máy chạy nó. Trong container thì không có `.env`, nên
+    danh sách đó đúng bằng bảng biến của nền tảng, tức đúng thứ ta muốn kiểm.
+    """
+
+    import os
+
+    for ten in list(os.environ):
+        if ten.startswith(("AI_", "FASTEMBED_")):
+            monkeypatch.delenv(ten, raising=False)
+
+
+def test_log_danh_dau_dung_field_bi_moi_truong_de(
+    log_gia: _LogGia, moi_truong_sach, tmp_path: Path
+) -> None:
+    """
+    `dat_tu_moi_truong` phải chứa field được đặt tường minh và KHÔNG chứa field
+    lấy mặc định. Đây là toàn bộ giá trị của dòng log này — không phân biệt được
+    hai loại đó thì nó chỉ là một bản sao của `Settings`.
+    """
+
+    from app.core.preflight import log_cau_hinh_hieu_luc
+
+    log_cau_hinh_hieu_luc(
+        Settings(
+            _env_file=None,
+            ai_embedding_model_file="onnx/model_qint8_avx512_vnni.onnx",
+            ai_min_score=0.8344,
+            ai_db_path=tmp_path / "x.db",
+        )
+    )
+
+    truong = log_gia.truong_cua("cau_hinh_hieu_luc")
+
+    assert truong is not None
+    assert "ai_embedding_model_file" in truong["dat_tu_moi_truong"]
+    # Không hề được đặt trong lời gọi trên.
+    assert "ai_embed_batch_size" not in truong["dat_tu_moi_truong"]
+    assert truong["model_file"] == "onnx/model_qint8_avx512_vnni.onnx"
+
+
+def test_canh_bao_khi_dinh_ram_vuot_gioi_han_container(
+    log_gia: _LogGia, tmp_path: Path, monkeypatch
+) -> None:
+    """Đúng cấu hình đã gây ra vòng lặp chết trên Render: gói 512 MB, model chưa tỉa."""
+
+    from app.core import preflight
+
+    monkeypatch.setattr(preflight, "gioi_han_ram_container", lambda: 512)
+
+    preflight.log_cau_hinh_hieu_luc(
+        Settings(
+            ai_embedding_model_file="onnx/model_qint8_avx512_vnni.onnx",
+            ai_min_score=0.8344,
+            ai_db_path=tmp_path / "x.db",
+        )
+    )
+
+    truong = log_gia.truong_cua("ram_co_the_khong_du")
+
+    assert truong is not None
+    assert truong["gioi_han_MB"] == 512
+    assert truong["dinh_du_kien_MB"] == 538
+    # Nói rõ đây là do biến môi trường, không phải mặc định của code — vì chỗ
+    # phải sửa là bảng điều khiển của nền tảng, không phải repo.
+    assert truong["bi_de_boi_moi_truong"] is True
+    assert "onnx/model_tia113k.onnx" in truong["goi_y"]
+
+
+def test_khong_canh_bao_khi_ban_tia_vua_goi_512(
+    log_gia: _LogGia, moi_truong_sach, tmp_path: Path, monkeypatch
+) -> None:
+    """Mặc định hiện tại phải im lặng ở đúng gói mà nó được chọn để vừa."""
+
+    from app.core import preflight
+
+    monkeypatch.setattr(preflight, "gioi_han_ram_container", lambda: 512)
+
+    preflight.log_cau_hinh_hieu_luc(Settings(_env_file=None, ai_db_path=tmp_path / "x.db"))
+
+    assert not log_gia.co("ram_co_the_khong_du")
+    assert log_gia.truong_cua("ram_container")["dinh_du_kien_MB"] == 317
+
+
+def test_khong_co_gioi_han_cgroup_thi_khong_doan_gi(
+    log_gia: _LogGia, tmp_path: Path, monkeypatch
+) -> None:
+    """
+    Ngoài container thì không có gì để so, và một cảnh báo RAM trên máy dev 32 GB
+    chỉ dạy người đọc bỏ qua cảnh báo.
+
+    Không dựa vào việc `/sys/fs/cgroup` vắng mặt: nó vắng trên Windows nhưng CÓ
+    trên runner Linux của CI, nên test sẽ xanh hay đỏ tuỳ nơi chạy.
+    """
+
+    from app.core import preflight
+
+    monkeypatch.setattr(preflight, "TEP_GIOI_HAN_RAM", ())
+
+    preflight.log_cau_hinh_hieu_luc(
+        Settings(
+            ai_embedding_model_file="onnx/model.onnx",
+            ai_min_score=0.83,
+            ai_db_path=tmp_path / "x.db",
+        )
+    )
+
+    assert log_gia.co("cau_hinh_hieu_luc")
+    assert not log_gia.co("ram_container")
+    assert not log_gia.co("ram_co_the_khong_du")
+
+
+@pytest.mark.parametrize(
+    "noi_dung, mong_doi",
+    [
+        ("536870912\n", 512),
+        # cgroup v2 nói "không giới hạn" bằng chữ.
+        ("max\n", None),
+        # cgroup v1 nói "không giới hạn" bằng ~2^63. Không lọc thì thành 8796093 MB
+        # và mọi so sánh sau đó đều vô nghĩa.
+        ("9223372036854771712\n", None),
+        ("", None),
+        ("khong-phai-so\n", None),
+    ],
+)
+def test_doc_gioi_han_ram_tu_cgroup(tmp_path: Path, monkeypatch, noi_dung: str, mong_doi) -> None:
+    from app.core import preflight
+
+    tep = tmp_path / "memory.max"
+    tep.write_text(noi_dung)
+
+    monkeypatch.setattr(preflight, "TEP_GIOI_HAN_RAM", (tep,))
+
+    assert preflight.gioi_han_ram_container() == mong_doi
+
+
+def test_moi_bien_the_onnx_deu_co_ca_nguong_va_dinh_ram() -> None:
+    """
+    Hai bảng phải phủ cùng một tập biến thể. Thiếu ở bảng RAM thì cảnh báo lặng
+    lẽ không bao giờ chạy — đúng kiểu hỏng mà cả nhóm test này sinh ra để chặn.
+    """
+
+    from app.embedding.encoder import DINH_RAM_MB_THEO_MODEL
+
+    assert set(DINH_RAM_MB_THEO_MODEL) == set(MIN_SCORE_THEO_MODEL)

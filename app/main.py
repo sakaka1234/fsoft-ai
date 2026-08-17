@@ -27,7 +27,11 @@ from app.chat.semantic_cache import SemanticCache
 from app.config import Settings, get_settings, resolve_path
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
-from app.core.preflight import canh_bao_model_khong_co_san, kiem_duong_dan
+from app.core.preflight import (
+    canh_bao_model_khong_co_san,
+    kiem_duong_dan,
+    log_cau_hinh_hieu_luc,
+)
 from app.embedding.encoder import Encoder
 from app.llm.budget import TokenBudget
 from app.llm.client import LlmClient
@@ -370,6 +374,14 @@ async def warmup(service: Service) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings: Settings = app.state.settings
+
+    # In cấu hình hiệu lực NGAY DÒNG ĐẦU, kể cả khi preflight bên dưới sắp giết
+    # tiến trình — thông báo lỗi chỉ hữu ích khi biết nó nói về cấu hình nào.
+    #
+    # Dòng này còn là thứ duy nhất phát hiện được một biến cũ sót lại trong bảng
+    # điều khiển của nền tảng: nó đánh dấu field nào bị môi trường đè, và đối
+    # chiếu đỉnh RAM dự kiến với giới hạn cgroup thật.
+    log_cau_hinh_hieu_luc(settings)
 
     # Kiểm mọi đường dẫn TRƯỚC tiên, báo hết một lượt rồi chết dứt khoát nếu sai.
     #
