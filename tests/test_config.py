@@ -109,3 +109,52 @@ def test_env_example_phu_het_moi_truong_cua_settings() -> None:
     thieu = trong_code - trong_file
 
     assert not thieu, f".env.example thiếu: {sorted(thieu)}"
+
+
+# ---------------------------------------------------------------------
+# Đường dẫn SQLite — lỗi đã xảy ra thật khi deploy lên Render
+# ---------------------------------------------------------------------
+
+
+def test_khong_ghi_duoc_thi_loi_noi_ro_phai_sua_bien_nao(tmp_path: Path, monkeypatch) -> None:
+    """
+    `AI_DB_PATH` tương đối trong container giải ra `/app/data`, mà `/app` thuộc
+    root còn service chạy bằng user không đặc quyền.
+
+    Lỗi gốc là `PermissionError: [Errno 13] Permission denied: '/app/data'` nổ ra
+    từ tận trong `pathlib.mkdir`, chôn dưới sáu tầng traceback của starlette và
+    anyio, KHÔNG nhắc gì tới biến môi trường cần sửa. Test này khoá lại yêu cầu:
+    thông báo phải gọi tên biến và nói rõ giá trị đúng.
+
+    Giả lập bằng monkeypatch chứ không bằng chmod: Windows bỏ qua chmod nên test
+    sẽ không chạy được trên máy dev.
+    """
+
+    from app.store.db import Database
+
+    def mkdir_bi_tu_choi(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "mkdir", mkdir_bi_tu_choi)
+
+    with pytest.raises(PermissionError) as thong_tin:
+        Database(tmp_path / "data" / "fsoft-ai.db").connect_sync()
+
+    loi = str(thong_tin.value)
+
+    assert "AI_DB_PATH" in loi
+    assert "/data/fsoft-ai.db" in loi
+    assert "tuyệt đối" in loi
+    # Phải giữ lại lỗi gốc để còn lần được nguyên nhân thật.
+    assert "PermissionError" in loi
+
+
+def test_thu_muc_ton_tai_nhung_khong_ghi_duoc_cung_bao_ro(tmp_path: Path, monkeypatch) -> None:
+    """Bind-mount thư mục của host: mkdir thành công nhưng vẫn không ghi được."""
+
+    from app.store import db as db_module
+
+    monkeypatch.setattr(db_module.os, "access", lambda *_a, **_k: False)
+
+    with pytest.raises(PermissionError, match="KHÔNG ghi được"):
+        db_module.Database(tmp_path / "data" / "fsoft-ai.db").connect_sync()

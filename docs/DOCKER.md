@@ -255,6 +255,17 @@ docker compose exec fsoft-ai python -c "import urllib.request as u; print(u.urlo
 
 Nó sẽ chỉ ra `encoder_ready` hay `index_ready` đang là `false`.
 
+### `PermissionError: Permission denied: '/app/data'`
+
+`AI_DB_PATH` là đường dẫn tương đối. Trong container chỉ `/data` ghi được. Đặt
+`AI_DB_PATH=/data/fsoft-ai.db`. Chi tiết ở [mục 11b](#11b-triển-khai-lên-render--và-hai-lỗi-chắc-chắn-gặp).
+
+### Deploy bị coi là thất bại dù log không có lỗi
+
+Nền tảng đang gõ health check vào cổng khác cổng service đang nghe. `CMD` đọc `$PORT` nên
+thường tự khớp — trừ khi bạn tự đặt `PORT` sai, hoặc nền tảng dùng tên biến khác. Kiểm dòng
+`Uvicorn running on http://0.0.0.0:...` trong log xem cổng thật là bao nhiêu.
+
 ### Mọi request trả `500` dù token đúng
 
 `AI_INTERNAL_TOKEN` trong `.env` đang mang giá trị là một chuỗi chú thích — xem cảnh báo ở
@@ -332,6 +343,77 @@ services:
 
 `--reload` chỉ dùng khi phát triển: nó khởi động lại tiến trình mỗi lần file đổi, và **nạp
 lại model 470 MB mỗi lần**, mất vài giây.
+
+---
+
+## 11b. Triển khai lên Render — và hai lỗi chắc chắn gặp
+
+Render chỉ đọc `Dockerfile`, **không đọc `docker-compose.yml`**. Nghĩa là khối `environment:`
+đè đường dẫn trong compose không hề có tác dụng, và bạn phải tự đặt biến trong bảng điều
+khiển Render.
+
+### Lỗi 1 — `PermissionError: [Errno 13] Permission denied: '/app/data'`
+
+Nguyên nhân: `AI_DB_PATH` được đặt bằng đường dẫn **tương đối** (thường vì dán nguyên nội
+dung `.env` của máy dev lên). `./data/fsoft-ai.db` giải ra thành `/app/data`, mà trong image
+`/app` thuộc `root` còn service chạy bằng user không đặc quyền.
+
+Sửa: đặt **đường dẫn tuyệt đối**.
+
+```
+AI_DB_PATH=/data/fsoft-ai.db
+```
+
+`/data` đã được tạo sẵn và cấp quyền trong image. Render free **không có disk bền**, nên dữ
+liệu mất mỗi lần container bị thay — không sao, service tự đồng bộ lại từ backend, chỉ tốn
+thời gian embed lại.
+
+### Lỗi 2 — cảnh báo `AI_MIN_SCORE=0.83 không phải ngưỡng đã hiệu chỉnh`
+
+Cùng nguyên nhân: biến môi trường lấy từ bản `.env` cũ. Bỏ qua cảnh báo này thì **cổng lọc
+liên quan sai âm thầm** — 2 trong 5 case NEGATIVE trả về thẻ bừa thay vì trả rỗng.
+
+Sửa: `AI_MIN_SCORE=0.8344`.
+
+### Bộ biến tối thiểu cho Render
+
+Đừng dán cả `.env`. Chỉ đặt đúng những biến này:
+
+```
+AI_DB_PATH=/data/fsoft-ai.db
+FASTEMBED_CACHE_PATH=/opt/fastembed_cache
+AI_EMBEDDING_MODEL_FILE=onnx/model_qint8_avx512_vnni.onnx
+AI_MIN_SCORE=0.8344
+AI_MODEL_VERSION=multilingual-e5-small-q8@t1
+AI_ONNX_CPU_ARENA=false
+
+AI_INTERNAL_TOKEN=<chuỗi ngẫu nhiên 64 ký tự>
+AI_LLM_API_KEY=<khoá Groq, để trống nếu chỉ cần ba nhánh 0 token>
+
+AI_SOURCE_MODE=fixture
+```
+
+Ba biến đầu tiên trùng với `ENV` trong `Dockerfile` nên **không đặt cũng được** — nhưng đặt
+tường minh thì đọc bảng biến là biết ngay service đang chạy cấu hình nào.
+
+**Đừng** đặt `PORT`: Render tự đặt, và `CMD` đã đọc nó.
+
+### Cảnh báo thẳng: Render free có thể không đủ
+
+| Hạng mục | Render free | Cần |
+|---|---|---|
+| RAM | 512 MB | **540 MB đỉnh** lúc nạp model |
+| CPU | 0,1 vCPU | nạp model đo 1,45s trên 1 nhân đầy đủ |
+| Disk bền | không có | không bắt buộc |
+| Ngủ khi rảnh | sau 15 phút | mỗi lần thức phải nạp lại model |
+
+Hai hàng đầu là vấn đề thật. RAM 512 MB nằm **dưới** đỉnh 540 MB, nên rất có thể OOM ngay
+lúc khởi động; và với 0,1 vCPU thì bước nạp model chậm gấp nhiều lần, dễ vượt thời gian chờ
+health check của Render.
+
+Vá xong hai lỗi trên mà vẫn thấy container bị giết không kèm traceback thì gần như chắc là
+OOM. Kiểm bằng cách xem log có dòng nào của `lifespan` chạy xong không. Khi đó đổi nền tảng
+— xem mục 13 để biết chỗ nào đủ RAM.
 
 ---
 

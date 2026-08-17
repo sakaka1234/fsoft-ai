@@ -120,10 +120,20 @@ EXPOSE 8000
 # chạy đầu trên máy yếu hoặc CPU bị bóp có thể lâu hơn nhiều). Trong khoảng đó
 # thất bại không bị tính là hỏng.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD ["python", "-c", "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/readyz', timeout=4).status == 200 else 1)"]
+    CMD ["sh", "-c", "python -c \"import os,sys,urllib.request as u; p=os.environ.get('PORT','8000'); sys.exit(0 if u.urlopen(f'http://127.0.0.1:{p}/readyz', timeout=4).status==200 else 1)\""]
 
 # Gọi thẳng uvicorn trong .venv, KHÔNG qua `uv run`: `uv run` kiểm lại môi
 # trường mỗi lần khởi động, chậm hơn và cần đọc được uv.lock. uvicorn tự chèn
 # thư mục làm việc vào sys.path (uvicorn/main.py) nên `app.main:app` import được.
-CMD ["/app/.venv/bin/uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+#
+# Vì sao phải qua `sh -c` chứ không dùng dạng exec thuần: các nền tảng PaaS
+# (Render, Cloud Run, Heroku, Fly) TỰ ĐẶT biến `PORT` và bắt service lắng nghe
+# đúng cổng đó. Ghim cứng 8000 thì health check của họ gõ vào cổng khác, không
+# thấy ai trả lời, và deploy bị coi là thất bại — kể cả khi service chạy hoàn
+# toàn bình thường bên trong.
+#
+# `exec` ở đầu là bắt buộc: nó thay thế `sh` bằng uvicorn nên uvicorn thành PID 1
+# và nhận được SIGTERM. Không có `exec` thì `sh` giữ PID 1, không chuyển tiếp
+# tín hiệu, và mỗi lần dừng container đều phải đợi hết 10 giây rồi bị SIGKILL —
+# lifespan không kịp chạy, SQLite không được đóng tử tế.
+CMD ["sh", "-c", "exec /app/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-${AI_SERVICE_PORT:-8000}} --workers 1"]

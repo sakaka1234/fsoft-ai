@@ -36,9 +36,11 @@ class Settings(BaseSettings):
     )
 
     # ---- Service ----
-    # CHƯA ĐƯỢC ĐỌC Ở ĐÂU. Cổng thật do `uvicorn --port` quyết định, kể cả
-    # trong Dockerfile. Giữ lại cho khớp SPEC muc 12, nhưng đổi giá trị này
-    # KHÔNG có tác dụng gì.
+    # Không được đọc từ trong code Python. `CMD` của Dockerfile mới là chỗ dùng
+    # nó, theo thứ tự `${PORT:-${AI_SERVICE_PORT:-8000}}`: các nền tảng PaaS tự
+    # đặt `PORT` và biến đó phải thắng, còn `AI_SERVICE_PORT` để đổi cổng khi tự
+    # chạy container. Chạy `uvicorn` trực tiếp ngoài Docker thì phải tự truyền
+    # `--port`, biến này không có tác dụng.
     ai_service_port: int = 8000
     ai_internal_token: str = "dev-token"
     ai_log_level: str = "INFO"
