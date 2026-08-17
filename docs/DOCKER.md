@@ -484,27 +484,70 @@ Triệu chứng chính xác, quan sát bằng cách gọi liên tục:
    thì `warmup` đã bắt, ghi `warmup_failed`, và service **vẫn sống** với `/readyz` 503 vĩnh
    viễn. Không có traceback nào là dấu hiệu của cgroup: kernel giết thẳng, không báo ai.
 
-Nguyên nhân hay gặp nhất **không phải** RAM thật sự không đủ, mà là **một biến cũ còn sót
-trong bảng điều khiển** trỏ vào biến thể ONNX nặng hơn — xem cảnh báo ở
-[bộ biến tối thiểu](#bộ-biến-tối-thiểu-cho-render) ngay dưới.
+Nguyên nhân hay gặp nhất **không phải** RAM thật sự không đủ, mà là service đang chạy **biến
+thể ONNX nặng hơn** biến thể bạn tưởng. Hai đường dẫn tới đó, và **phải phân biệt được** vì
+chỗ phải sửa khác nhau hoàn toàn:
+
+| | Ảnh CŨ đang chạy | Biến CŨ còn sót trong bảng điều khiển |
+|---|---|---|
+| Dấu hiệu | `model_version` = mặc định trong code của commit cũ | `model_version` = giá trị bạn từng gõ tay |
+| Sửa ở đâu | Deploy lại (xem dưới) | Xoá biến, [bộ biến tối thiểu](#bộ-biến-tối-thiểu-cho-render) |
+
+Hai trường hợp này cho **cùng một triệu chứng và thường cùng một giá trị `model_version`** —
+vì giá trị bạn từng gõ tay chính là mặc định của commit lúc đó. Đã mất hai vòng chẩn đoán vào
+đúng chỗ này: kết luận "biến cũ còn sót" là **sai**, thủ phạm là ảnh cũ.
+
+Cách phân biệt dứt điểm là dòng `commit` trong log khởi động (xem dưới) — nó nói thẳng mã đang
+chạy là commit nào. So với `git log -1 --format=%h` trên máy bạn.
+
+**Vì sao ảnh cũ lại chạy tiếp dù bạn đã push:** Render chỉ deploy khi nhận được webhook từ
+GitHub rồi tải mã về. Cả hai bước đó đều có thể im lặng thất bại:
+
+- Build của commit mới **hỏng** → Render giữ nguyên ảnh cũ đang chạy. Đây là hành vi đúng,
+  nhưng nó nghĩa là một build hỏng trông giống hệt "service vẫn như cũ".
+- **GitHub đang sự cố.** Đã gặp thật: `Webhooks` ở trạng thái degraded và archive download lỗi
+  ~50%, nên push lên GitHub thành công mà Render không hề biết. Kiểm ở
+  <https://www.githubstatus.com> — quan tâm ba dòng `Webhooks`, `API Requests`, và ghi chú về
+  *archive downloads*.
+- **Auto-Deploy** bị đặt `No` trong Settings của service.
+
+Trong cả ba trường hợp, cách chắc chắn nhất là **Manual Deploy → Deploy latest commit**, rồi
+đối chiếu `commit` trong log với commit bạn vừa push.
 
 **Từ bản này, log nói thẳng ra.** Dòng đầu tiên khi khởi động là cấu hình đang có hiệu lực,
 kèm danh sách field nào bị biến môi trường đè:
 
 ```json
-{"event":"cau_hinh_hieu_luc","model_file":"onnx/model_qint8_avx512_vnni.onnx",
+{"event":"cau_hinh_hieu_luc","commit":"610b1b7c44421211cca9202b9edc61e9ebacd1ce",
+ "model_file":"onnx/model_qint8_avx512_vnni.onnx","model_version":"multilingual-e5-small-q8@t1",
  "dat_tu_moi_truong":["ai_embedding_model_file","ai_min_score",...]}
 {"event":"ram_container","gioi_han_MB":512,"dinh_du_kien_MB":538}
 {"event":"ram_co_the_khong_du","level":"warning","bi_de_boi_moi_truong":true,
  "goi_y":"bỏ hẳn AI_EMBEDDING_MODEL_FILE khỏi bảng biến của nền tảng ..."}
 ```
 
-`gioi_han_MB` đọc từ cgroup của chính container, không phải RAM của máy chủ. Đối chiếu với
-đỉnh đo được của biến thể đang cấu hình. Đây là **cảnh báo, không chặn deploy** — con số đỉnh
-đo trên máy khác nên không đáng để chặn, nhưng đáng để in ra.
+Đọc theo thứ tự này:
 
-Tìm ba dòng đó trong log Render. Không thấy dòng nào cả nghĩa là tiến trình chết trước cả
-lifespan, lúc đó xem lại `Events` của Render — nó ghi riêng sự kiện hết bộ nhớ.
+1. **`commit`** — mã đang chạy. Lấy từ `RENDER_GIT_COMMIT` (Railway và Heroku có biến riêng,
+   đều được thử). Khác commit bạn vừa push nghĩa là **ảnh cũ**, và mọi suy luận về cấu hình
+   phía dưới đều đang nói về mã cũ. `null` nghĩa là nền tảng không công bố — lúc đó dựa vào
+   `model_version`.
+2. **`dat_tu_moi_truong`** — field nào bị biến môi trường đè, lấy từ `model_fields_set` của
+   pydantic. Trong container không có `.env` nên danh sách này đúng bằng bảng biến của nền tảng.
+3. **`gioi_han_MB`** — đọc từ cgroup của chính container, không phải RAM của máy chủ. Đối chiếu
+   với đỉnh đo được của biến thể đang cấu hình. Đây là **cảnh báo, không chặn deploy** — con số
+   đỉnh đo trên máy khác nên không đáng để chặn, nhưng đáng để in ra.
+
+Không thấy dòng nào cả nghĩa là tiến trình chết trước cả lifespan; lúc đó xem `Events` của
+Render, nó ghi riêng sự kiện hết bộ nhớ.
+
+Không đọc được log thì `/readyz` cũng nói — **không cần token, chạy được cả khi chưa sẵn sàng**:
+
+```bash
+curl -s https://<service>.onrender.com/readyz
+# {"ready":false,"encoder_ready":true,"index_ready":false,
+#  "model_version":"e5-small-q8-tia113k@t1"}     <- đúng thì ảnh MỚI đã lên
+```
 
 ### Bộ biến tối thiểu cho Render
 

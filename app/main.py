@@ -203,6 +203,25 @@ class ReadyzResponse(BaseModel):
     ready: bool = Field(description="Bằng `encoder_ready AND index_ready`.")
     encoder_ready: bool = Field(description="Model ONNX đã nạp vào RAM chưa.")
     index_ready: bool = Field(description="Đã dựng xong chỉ mục vector và BM25 chưa.")
+    # Vì sao một endpoint sống/chết lại trả về phiên bản model:
+    #
+    # Sau khi deploy, câu hỏi đầu tiên luôn là "ảnh MỚI đã lên chưa". Không có
+    # trường này thì cách duy nhất để biết là `/internal/v1/index/status` — cần
+    # token, mà token thì người đang xem log Render chưa chắc có trong tay.
+    #
+    # Đã trả giá thật cho việc thiếu nó: một ảnh cũ chạy suốt và mọi triệu chứng
+    # đều khớp với giả thuyết SAI (biến môi trường sót lại), vì `model_version`
+    # quan sát được đúng bằng MẶC ĐỊNH TRONG CODE của commit cũ. Phân biệt hai
+    # nguyên nhân đó mất hai vòng chẩn đoán.
+    #
+    # Không phải bí mật: `/docs` công khai đã ghi tên model, và giá trị này chỉ
+    # là một chuỗi phiên bản.
+    model_version: str = Field(
+        description=(
+            "`AI_MODEL_VERSION` đang có hiệu lực. Dùng để xác nhận ảnh mới đã "
+            "lên: giá trị phải đổi sau mỗi lần đổi biến thể model."
+        )
+    )
 
 
 @dataclass
@@ -510,6 +529,9 @@ def create_app(settings: Settings | None = None, encoder: Encoder | None = None)
 
         Gọi endpoint nghiệp vụ trước khi cờ này lên `true` sẽ nhận
         `503 INDEX_NOT_READY`.
+
+        `model_version` để xác nhận **ảnh mới đã lên chưa** sau khi deploy —
+        không cần token, gọi được ngay cả khi service chưa sẵn sàng.
         """
 
         service: Service = app.state.service
@@ -520,6 +542,7 @@ def create_app(settings: Settings | None = None, encoder: Encoder | None = None)
                 "ready": service.is_ready,
                 "encoder_ready": service.encoder_ready,
                 "index_ready": service.index_ready,
+                "model_version": service.settings.ai_model_version,
             },
         )
 

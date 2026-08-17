@@ -210,6 +210,39 @@ def gioi_han_ram_container() -> int | None:
     return None
 
 
+# Biến mà từng nền tảng dùng để công bố commit đang chạy. Không nền tảng nào
+# thống nhất với nền tảng nào, nên thử lần lượt.
+_BIEN_COMMIT = (
+    "RENDER_GIT_COMMIT",
+    "RAILWAY_GIT_COMMIT_SHA",
+    # Heroku và các bản dựng theo chuẩn Cloud Native Buildpacks.
+    "SOURCE_VERSION",
+    # Tự đặt khi build tay: `docker build --build-arg` rồi `ENV GIT_COMMIT=...`.
+    "GIT_COMMIT",
+)
+
+
+def commit_dang_chay() -> str | None:
+    """
+    Commit của mã đang chạy, nếu nền tảng có công bố.
+
+    Vì sao đáng một hàm riêng: thiếu thông tin này đã dẫn tới một kết luận SAI.
+    Trên Render, `model_version` quan sát được là `multilingual-e5-small-q8@t1` —
+    và giá trị đó vừa có thể là một biến môi trường cũ còn sót, vừa có thể là
+    MẶC ĐỊNH TRONG CODE của một ảnh cũ. Hai nguyên nhân khác nhau hoàn toàn, một
+    cái sửa ở bảng điều khiển, một cái sửa bằng deploy lại. Không có commit trong
+    log thì không phân biệt được, và tôi đã chọn sai cái.
+    """
+
+    for ten in _BIEN_COMMIT:
+        gia_tri = os.environ.get(ten, "").strip()
+
+        if gia_tri:
+            return gia_tri
+
+    return None
+
+
 def log_cau_hinh_hieu_luc(settings: Settings) -> None:
     """
     In cấu hình ĐANG CÓ HIỆU LỰC, đánh dấu cái nào bị biến môi trường đè lên.
@@ -234,6 +267,7 @@ def log_cau_hinh_hieu_luc(settings: Settings) -> None:
 
     log.info(
         "cau_hinh_hieu_luc",
+        commit=commit_dang_chay(),
         source_mode=settings.ai_source_mode,
         model_file=settings.ai_embedding_model_file,
         model_version=settings.ai_model_version,

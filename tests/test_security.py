@@ -180,13 +180,38 @@ def test_readyz_503_khi_model_chua_nap(client: TestClient) -> None:
     response = client.get("/readyz")
 
     assert response.status_code == 503
-    assert response.json() == {"ready": False, "encoder_ready": False, "index_ready": True}
+    assert response.json() == {
+        "ready": False,
+        "encoder_ready": False,
+        "index_ready": True,
+        "model_version": client.app.state.service.settings.ai_model_version,
+    }
 
 
 def test_readyz_503_khi_index_chua_dung_xong(client: TestClient) -> None:
     client.app.state.service.index_ready = False
 
     assert client.get("/readyz").status_code == 503
+
+
+def test_readyz_noi_ra_model_version_ke_ca_khi_chua_san_sang(client: TestClient) -> None:
+    """
+    Sau mỗi lần deploy, câu hỏi đầu tiên là "ảnh MỚI đã lên chưa" — và phải trả
+    lời được KHÔNG CẦN TOKEN, vì lúc đó service thường chưa sẵn sàng và người đang
+    xem log chưa chắc có token trong tay.
+
+    Đã trả giá thật cho việc thiếu trường này: một ảnh cũ chạy suốt trên Render mà
+    mọi triệu chứng đều khớp với một giả thuyết SAI (biến môi trường cũ còn sót),
+    vì `model_version` quan sát được đúng bằng MẶC ĐỊNH TRONG CODE của commit cũ.
+    """
+
+    client.app.state.service.encoder_ready = False
+    client.app.state.service.index_ready = False
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["model_version"] == client.app.state.service.settings.ai_model_version
 
 
 def test_backend_chet_van_khoi_dong_duoc(client_backend_chet: TestClient) -> None:
