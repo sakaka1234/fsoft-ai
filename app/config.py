@@ -64,19 +64,35 @@ class Settings(BaseSettings):
 
     # ---- Embedding ----
     ai_embedding_model: str = "intfloat/multilingual-e5-small"
-    # Biến thể ONNX. Mặc định là bản lượng tử 8 bit: 113 MB thay vì 448 MB, RSS
-    # 498 MB thay vì 893 MB, cùng chỉ số Recall@5/MRR, lại nhanh hơn.
+    # Biến thể ONNX. Mặc định là bản lượng tử 8 bit ĐÃ TỈA TỪ VỰNG: đỉnh RSS
+    # 317 MB thay vì 936 MB của bản fp32, cùng Recall@5/MRR, nạp nhanh hơn ba
+    # lần. Bảng so sánh đầy đủ và lý do ở `app/embedding/encoder.py`.
+    #
+    # File này KHÔNG có trên Hugging Face — `scripts/tia_vocab.py` sinh ra nó,
+    # và Dockerfile chạy script đó lúc build.
     #
     # ĐỔI GIÁ TRỊ NÀY LÀ PHẢI ĐỔI KÈM `ai_min_score` VÀ `ai_model_version`:
     # mỗi biến thể có phân bố cosine riêng, và vector cũ không dùng lại được.
     # Bảng ngưỡng ở `app/embedding/encoder.py`; sai cặp thì retrieval kém đi âm
     # thầm chứ không báo lỗi. `Settings` tự kiểm cặp này lúc khởi tạo.
-    ai_embedding_model_file: str = "onnx/model_qint8_avx512_vnni.onnx"
+    ai_embedding_model_file: str = "onnx/model_tia113k.onnx"
     ai_embedding_dim: int = 384
-    ai_model_version: str = "multilingual-e5-small-q8@t1"
+    ai_model_version: str = "e5-small-q8-tia113k@t1"
     # Bộ cấp phát arena của ONNX Runtime. Tắt tiết kiệm ~47 MB RSS mà độ trễ
     # không đổi — batch ở đây quá nhỏ để arena có ích.
     ai_onnx_cpu_arena: bool = False
+    # Số luồng ONNX Runtime dùng cho một phép suy luận. `0` nghĩa là để ORT tự
+    # quyết, và ORT quyết bằng số nhân của MÁY CHỦ — không phải theo giới hạn CPU
+    # của container. Trên một host 16 nhân bị bóp còn 0,1 vCPU, nó vẫn mở 16 luồng
+    # rồi tranh nhau, chậm hơn hẳn chạy 1 luồng.
+    #
+    # Vì vậy Dockerfile đặt tường minh `AI_ORT_INTRA_OP_THREADS=1`, còn máy dev
+    # để `0` cho nhanh (đo được: 1 luồng chậm hơn 2,1 lần trên máy 16 nhân).
+    #
+    # LƯU Ý: `OMP_NUM_THREADS` và `ORT_NUM_THREADS` KHÔNG điều khiển việc này.
+    # ONNX Runtime không đọc hai biến đó; nó chỉ nhận qua `SessionOptions`. Niềm
+    # tin ngược lại từng được ghi ở 9 chỗ trong repo này và đều đã sửa.
+    ai_ort_intra_op_threads: int = 0
     ai_query_prefix: str = "query: "
     ai_passage_prefix: str = "passage: "
     ai_embed_batch_size: int = 32

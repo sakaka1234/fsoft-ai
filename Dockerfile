@@ -22,11 +22,16 @@ ENV PYTHONUNBUFFERED=1 \
     # SQLite nằm trên volume, KHÔNG nằm trong image: xoá container không được
     # làm mất index đã embed.
     AI_DB_PATH=/data/fsoft-ai.db \
-    # ONNX Runtime mặc định mở thread bằng số nhân CPU. Trong container bị giới
-    # hạn CPU, nó vẫn đọc số nhân của MÁY CHỦ nên tạo thừa thread rồi tranh nhau
-    # — chậm hơn hẳn chạy 1 thread. SPEC muc 5.10 bẫy 2.
+    # Giới hạn threadpool OpenMP mà BLAS trong numpy dùng. Có tác dụng thật.
     OMP_NUM_THREADS=1 \
+    # KHÔNG có tác dụng với ONNX Runtime — nó không đọc biến môi trường nào để
+    # lấy số luồng, chỉ nhận qua SessionOptions. Giữ lại cho vô hại và cho khớp
+    # tài liệu cũ. Đường ĐÚNG là dòng ngay dưới.
     ORT_NUM_THREADS=1 \
+    # Đây mới là thứ điều khiển ONNX Runtime. Đặt 1 vì container thường bị bóp
+    # CPU mà ORT lại đếm nhân của MÁY CHỦ: một host 16 nhân bóp còn 0,1 vCPU vẫn
+    # khiến nó mở 16 luồng rồi tranh nhau, chậm hơn hẳn chạy một luồng.
+    AI_ORT_INTRA_OP_THREADS=1 \
     # uv mặc định hardlink từ cache sang .venv; qua ranh giới layer thì không
     # hardlink được và nó cảnh báo suốt. Copy thẳng cho yên.
     UV_LINK_MODE=copy \
@@ -80,7 +85,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev
 
 # ---------------------------------------------------------------------
-# Layer 2 — model 470 MB. Layer đắt nhất, nên đứng càng cao càng tốt.
+# Layer 2 — tải model GỐC 118 MB từ Hugging Face. Layer đắt nhất về mạng.
 # ---------------------------------------------------------------------
 #
 # `download_model.py` cố ý KHÔNG import app, nhờ vậy nó chạy được ở đây khi app/
@@ -89,6 +94,7 @@ RUN uv sync --locked --no-dev
 # Script tự gọi huggingface_hub thay vì để fastembed tự tải: fastembed có lỗi
 # đối chiếu tệp làm mọi lần tải sạch đều thất bại. Chi tiết trong chính file đó.
 COPY scripts/download_model.py ./scripts/
+COPY scripts/tia_vocab.py ./scripts/
 
 # Gọi THẲNG interpreter trong .venv, không qua `uv run`.
 #
@@ -99,13 +105,31 @@ COPY scripts/download_model.py ./scripts/
 RUN /app/.venv/bin/python scripts/download_model.py
 
 # ---------------------------------------------------------------------
-# Layer 3 — mã nguồn. Đổi liên tục, nên để cuối cùng.
+# Layer 3 — mã nguồn.
 # ---------------------------------------------------------------------
 COPY app ./app
 COPY migrations ./migrations
 # Dữ liệu mẫu 24 thẻ. Cần cho AI_SOURCE_MODE=fixture — chạy thử được ngay mà
-# không cần backend Java.
+# không cần backend Java. Bước tỉa từ vựng bên dưới cũng đọc nó.
 COPY tests/fixtures ./tests/fixtures
+# Bộ đo 40 case. Bước tỉa dùng nó làm một trong ba nguồn ngữ liệu.
+COPY tests/eval ./tests/eval
+
+# ---------------------------------------------------------------------
+# Layer 4 — TỈA TỪ VỰNG. Đây là bước quyết định service có chạy nổi trên gói
+# hosting nhỏ hay không: đỉnh RSS 538 MB -> 317 MB.
+# ---------------------------------------------------------------------
+#
+# Phải đứng SAU `COPY app` vì script đọc `app/retrieval/intent_examples.py` và
+# `app/embedding/text_builder.py` để biết chính xác những text nào đi qua
+# tokenizer. Đổi code trong app/ sẽ chạy lại bước này (~1 phút) nhưng KHÔNG làm
+# mất layer tải 118 MB ở trên.
+#
+# Gọi thẳng interpreter của .venv, KHÔNG qua `uv run`: `uv run` tự đồng bộ lại
+# môi trường và kéo NGƯỢC nhóm dev vào, xoá sạch tác dụng của `--no-dev` ở trên.
+# Đó là lý do `onnx` nằm ở deps CHÍNH chứ không phải nhóm dev, dù nó chỉ cần lúc
+# build — xem chú thích trong pyproject.toml.
+RUN /app/.venv/bin/python scripts/tia_vocab.py --ngan-sach 120000 --ten tia113k
 
 # Từ đây trở đi không chạy bằng root nữa. User và /data đã dựng ở đầu file.
 USER fsoft

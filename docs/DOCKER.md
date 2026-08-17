@@ -14,9 +14,10 @@
   thì mọi lệnh dưới đây thay `docker compose` thành `docker-compose`.
 - **Khoảng 2,5 GB đĩa trống.** Ảnh cuối khoảng 1 GB, nhưng lúc build cần thêm chỗ cho layer
   trung gian.
-- **Ít nhất 768 MB RAM cấp cho container** (đo được: 504 MB khi chạy, đỉnh 540 MB lúc nạp
-  model). Docker Desktop trên Windows/macOS mặc định cấp 2 GB cho cả máy ảo — đủ.
-- **Mạng lúc build** để tải model 470 MB từ Hugging Face. Lúc *chạy* thì không cần mạng, trừ
+- **Ít nhất 512 MB RAM cấp cho container** (đo được: đỉnh 317 MB). Docker Desktop trên
+  Windows/macOS mặc định cấp 2 GB cho cả máy ảo — thừa đủ.
+- **Mạng lúc build** để tải model gốc 118 MB từ Hugging Face (bước tỉa từ vựng sau đó chạy
+  hoàn toàn cục bộ). Lúc *chạy* thì không cần mạng, trừ
   khi bạn dùng nhánh LLM hoặc nối vào backend Java thật.
 
 ---
@@ -433,22 +434,25 @@ FASTEMBED_CACHE_PATH=./.cache/fastembed  <- SAI, giải ra /app/.cache
 
 **Đừng** đặt `PORT`: Render tự đặt, và `CMD` đã đọc nó.
 
-### Cảnh báo thẳng: Render free có thể không đủ
+### Render free: RAM đã đủ, nhưng CPU thì chậm
 
 | Hạng mục | Render free | Cần |
 |---|---|---|
-| RAM | 512 MB | **540 MB đỉnh** lúc nạp model |
-| CPU | 0,1 vCPU | nạp model đo 1,45s trên 1 nhân đầy đủ |
+| RAM | 512 MB | **317 MB đỉnh** — vừa, biên 195 MB |
+| CPU | 0,1 vCPU | nạp model 0,76s trên 1 nhân đầy đủ |
 | Disk bền | không có | không bắt buộc |
 | Ngủ khi rảnh | sau 15 phút | mỗi lần thức phải nạp lại model |
 
-Hai hàng đầu là vấn đề thật. RAM 512 MB nằm **dưới** đỉnh 540 MB, nên rất có thể OOM ngay
-lúc khởi động; và với 0,1 vCPU thì bước nạp model chậm gấp nhiều lần, dễ vượt thời gian chờ
-health check của Render.
+RAM **đã hết là vấn đề** kể từ bản tỉa từ vựng: đỉnh 317 MB, biên 195 MB. Trước đó đỉnh là
+538 MB và Render free OOM thành vòng lặp chết — nếu bạn đang xem một bản cũ hơn thì đó là
+nguyên nhân.
 
-Vá xong hai lỗi trên mà vẫn thấy container bị giết không kèm traceback thì gần như chắc là
-OOM. Kiểm bằng cách xem log có dòng nào của `lifespan` chạy xong không. Khi đó đổi nền tảng
-— xem mục 13 để biết chỗ nào đủ RAM.
+Còn lại là chuyện tốc độ: 0,1 vCPU khiến bước nạp model chậm gấp nhiều lần con số 0,76 giây,
+và service ngủ sau 15 phút rảnh nên mỗi lần thức là nạp lại. `Dockerfile` đặt
+`AI_ORT_INTRA_OP_THREADS=1` để ONNX Runtime không mở 16 luồng cho 0,1 vCPU rồi tự tranh nhau.
+
+Nếu container vẫn bị giết mà **không kèm traceback** thì mới là OOM. Kiểm bằng cách xem log có
+dòng nào của `lifespan` chạy xong không, rồi xem mục 13.
 
 ---
 
@@ -472,41 +476,51 @@ Railway tự nhận `Dockerfile`. Cần làm thêm:
 
 Đo trên Xeon E5-2680, cùng một service, chỉ đổi biến thể ONNX:
 
-| Biến thể | File | RSS chạy | Đỉnh | Recall@5 | NEGATIVE | p50 |
+| Biến thể | File | Đỉnh RSS | Recall@5 | NEGATIVE | p50 | Nạp |
 |---|---|---|---|---|---|---|
-| `model.onnx` fp32 | 448 MB | 893 MB | — | 0.971 | 1.00 | 11,7ms |
-| `model_O4.onnx` | 224 MB | 707 MB | — | 0.971 | 1.00 | 12,4ms |
-| **`..._qint8...onnx`** ← mặc định | **113 MB** | **504 MB** | **540 MB** | **0.971** | **1.00** | **10,3ms** |
+| `model.onnx` fp32 | 448 MB | 935,8 MB | 0.971 | 1.00 | 10,9ms | 2,48s |
+| `model_O4.onnx` | 224 MB | 696,7 MB | 0.971 | 1.00 | 11,2ms | 2,31s |
+| `..._qint8...onnx` | 118 MB | 537,8 MB | 0.971 | 1.00 | 9,2ms | 1,45s |
+| **`model_tia113k.onnx`** ← mặc định | **66 MB** | **317,0 MB** | **0.971** | **1.00** | **9,0ms** | **0,76s** |
 
-Bản lượng tử **giảm 44% RAM, giữ nguyên mọi chỉ số, và còn nhanh hơn** — nạp 1,4 giây thay
-vì 4,0 giây. Sau 40 lượt search và 3 lượt quiz, RSS không nhích lên: 503,3 → 503,9 MB.
+Bản tỉa từ vựng **giảm 66% RAM so với fp32, giữ nguyên mọi chỉ số, và nạp nhanh hơn ba lần**.
 
-Đỉnh 540 MB xảy ra **lúc nạp model**, không phải lúc phục vụ. Đây là con số quyết định khi
-đặt trần bộ nhớ.
+Vì sao lượng tử hoá một mình thì tắc ở 538 MB: kẻ tốn RAM nhất **không phải model mà là
+tokenizer**. `Tokenizer.from_file` nạp bảng Unigram 250.002 token và ăn **250 MB** (~1 KB mỗi
+token), còn `ort.InferenceSession` chỉ ăn 130 MB. Vì 250 MB đó là hằng số không phụ thuộc biến
+thể ONNX, đổi biến thể ONNX kéo được 936 → 697 → 538 rồi hết đường. Tỉa từ vựng đánh vào cả
+hai: tokenizer 250 → 79 MB, session 134 → 82 MB.
 
-> **Cái bẫy:** đổi `AI_EMBEDDING_MODEL_FILE` mà quên đổi `AI_MIN_SCORE` thì cổng lọc liên
-> quan sai âm thầm. Đo thật: bản lượng tử dùng ngưỡng 0.83 của fp32 làm **2 trong 5 case
-> NEGATIVE hỏng** — câu lẽ ra trả rỗng bắt đầu trả về thẻ bừa, không có lỗi nào báo.
+Tỉa **không mất chất lượng** vì `scale`/`zero_point` của bảng là vô hướng per-tensor, nên chọn
+hàng trên mảng uint8 là phép toán chính xác — token nào được giữ thì vector giống **từng bit**.
+
+> **Hai cái bẫy, cả hai đều hỏng âm thầm:**
+>
+> Đổi `AI_EMBEDDING_MODEL_FILE` mà quên đổi `AI_MIN_SCORE` thì cổng lọc liên quan sai. Đo
+> thật: bản lượng tử dùng ngưỡng 0.83 của fp32 làm **2 trong 5 case NEGATIVE hỏng**.
 > `Settings` sẽ cảnh báo, và `tests/test_embedding.py` ghim cặp này lại.
+>
+> `AI_EMBED_BATCH_SIZE` cũng đổi kết quả embedding qua nhiễu padding, và cổng NEGATIVE hiện
+> cách mép đúng **4,7e-4**. Hạ batch 32 → 8 làm NEGATIVE tụt 1.000 → 0.800. Mọi lần đổi batch
+> phải chạy lại `scripts/hieu_chinh_nguong.py`.
 
-Muốn đo lại trên máy bạn: `uv run python scripts/do_bien_the_onnx.py` (chạy cả ba biến thể,
-mỗi cái một tiến trình riêng). Hiệu chỉnh lại ngưỡng: `uv run python scripts/hieu_chinh_nguong.py`.
+Muốn đo lại trên máy bạn: `uv run python scripts/do_bien_the_onnx.py` (chạy cả bốn biến thể,
+mỗi cái một tiến trình riêng). Hiệu chỉnh ngưỡng: `uv run python scripts/hieu_chinh_nguong.py`.
+Dựng lại bản tỉa: `uv run python scripts/tia_vocab.py --ngan-sach 120000 --ten tia113k`.
 
 ### Gói nào dùng được
 
-**Gói 512 MB không dùng được**, kể cả sau khi đã tối ưu: đỉnh 540 MB làm nó OOM ngay lúc
-khởi động, tức là chết trước khi kịp phục vụ request đầu tiên. Loại Render free,
-Koyeb free, Fly `shared-cpu-1x` 256 MB.
-
-Cần **tối thiểu 768 MB**. Vài lựa chọn thực tế:
+Với đỉnh 317 MB, **gói 512 MB đã dùng được** — biên 195 MB. Trước bản tỉa thì không:
+đỉnh 538 MB làm Render free OOM thành vòng lặp chết.
 
 | Nơi chạy | RAM | Ghi chú |
 |---|---|---|
-| Oracle Cloud Always Free | 24 GB (ARM) | Miễn phí thật và rộng nhất. Cần build ảnh cho `arm64` |
+| Render free | 512 MB | Vừa. Nhưng 0,1 vCPU nên khởi động chậm, và ngủ sau 15 phút rảnh |
 | Hugging Face Spaces (Docker, CPU basic) | 16 GB | Miễn phí, dựng nhanh nhất để demo. Không có volume bền |
-| Google Cloud Run | đặt tuỳ ý, 1 GB | Có bậc miễn phí, tự co về 0 khi rảnh. Nạp model 1,4 giây nên cold start chấp nhận được |
+| Oracle Cloud Always Free | 24 GB (ARM) | Miễn phí thật và rộng nhất. Cần build ảnh cho `arm64` |
+| Google Cloud Run | đặt tuỳ ý | Có bậc miễn phí, tự co về 0. Nạp model 0,76s nên cold start chấp nhận được |
 | Railway Hobby | 1 GB | Rẻ, sẵn volume, đúng thứ SPEC mục 13 mô tả |
-| Fly.io `shared-cpu-1x` 1 GB | 1 GB | Có volume |
+| Fly.io `shared-cpu-1x` | 256 MB–1 GB | 256 MB vẫn KHÔNG đủ; chọn bậc 512 MB trở lên |
 
 Với Cloud Run và các nền tảng tự co giãn, nhớ **giới hạn 1 instance**: semantic cache và
 ngân sách token đều nằm trong RAM, và nhiều instance sẽ chạy nhiều vòng lặp đồng bộ chồng lên
@@ -514,11 +528,27 @@ nhau (SPEC mục 14.3).
 
 ### Còn giảm được nữa không
 
-Khó. Sau khi bỏ model, phần sàn khoảng **354 MB** là `onnxruntime` + `numpy` + tokenizer —
-đo được bằng cách trừ: fp32 tốn 799 MB cho file 448 MB, lượng tử tốn 466 MB cho file 113 MB,
-chênh lệch đúng bằng chênh lệch kích thước file. Muốn xuống dưới 400 MB thì phải đổi hẳn
-cách làm, ví dụ gọi API embedding bên ngoài — nhưng như vậy mất luôn tính chất "0 token,
-không phụ thuộc mạng" vốn là nền tảng của thiết kế này.
+Được thêm khoảng 137 MB nữa, nhưng **chưa làm** vì rủi ro không đáng với 195 MB biên đang có.
 
-Một mẹo đã áp dụng: tắt bộ cấp phát arena của ONNX Runtime (`AI_ONNX_CPU_ARENA=false`) tiết
-kiệm ~47 MB mà độ trễ không đổi.
+Hướng đó là **thay hẳn backend tokenizer**: bỏ `tokenizers` của HuggingFace, đọc trực tiếp
+`sentencepiece.bpe.model` (5 MB) bằng thư viện `sentencepiece` — đo được 250 → 39 MB. Đã kiểm
+chất lượng: Recall@5, MRR, intent, NEGATIVE giống hệt, vector khớp tới 6e-8, 0/40 case đổi phía
+ngưỡng.
+
+Cái giá là phải tự viết lại `Encoder` (tokenize + mean-pool + L2 normalize + tạo
+`ort.InferenceSession` trực tiếp), và **nhân bản đúng ba quirk** đã đo được:
+
+1. `<unk>` KHÔNG theo quy luật `id_hf = id_sp + 1` — sentencepiece id 0 ứng với HF id 3. Cộng 1
+   máy móc thì mọi ký tự ngoài từ vựng thành `<pad>`, sai âm thầm.
+2. fastembed pad bằng **id 0 (`<s>`)**, không phải `<pad>=1`, vì nó lấy `pad_token_id` từ
+   `config.json`. Dùng pad "đúng về lý" làm mọi vector lệch tới 1,9e-2 — cùng cỡ với khoảng
+   chồng lấn 1,24e-2 đang bảo vệ NEGATIVE.
+3. HF giữ một token `▁` cho khoảng trắng cuối, sentencepiece bỏ. Phải `strip()` cả hai phía.
+
+Phần sàn còn lại khoảng **91–111 MB** là `onnxruntime` + `numpy`, không giảm được nữa mà không
+bỏ hẳn embedding cục bộ — tức mất luôn tính chất "0 token, không phụ thuộc mạng" vốn là nền
+tảng của thiết kế này.
+
+Hai mẹo đã áp dụng: tắt bộ cấp phát arena (`AI_ONNX_CPU_ARENA=false`, ~47 MB, độ trễ không
+đổi), và đặt `AI_ORT_INTRA_OP_THREADS=1` trong Docker để ONNX Runtime không mở luồng theo số
+nhân của máy chủ.

@@ -41,16 +41,31 @@ jobs:
       - name: Cài Python và dependency
         run: uv sync --frozen
 
-      # Model ONNX nặng 486 MB. Không cache thì mỗi lần chạy CI đều tải lại,
-      # vừa chậm vừa dễ bị Hugging Face chặn vì gọi quá nhiều.
+      # Model ONNX gốc nặng 118 MB, cộng bản tỉa 66 MB. Không cache thì mỗi lần
+      # chạy CI đều tải lại, vừa chậm vừa dễ bị Hugging Face chặn vì gọi quá nhiều.
+      #
+      # Khoá cache bao gồm `tia_vocab.py`: script đó quyết định NỘI DUNG của bản
+      # tỉa, nên sửa nó mà vẫn dùng cache cũ là chạy test trên một model khác với
+      # model mà code đang mô tả.
       - name: Cache model embedding
         uses: actions/cache@v4
         with:
           path: .cache/fastembed
-          key: fastembed-${{ hashFiles('app/embedding/encoder.py') }}-multilingual-e5-small
+          key: >-
+            fastembed-${{ hashFiles('app/embedding/encoder.py',
+            'scripts/download_model.py', 'scripts/tia_vocab.py') }}-e5-small-tia113k
 
-      - name: Tải model nếu cache trượt
+      - name: Tải model gốc nếu cache trượt
         run: uv run python scripts/download_model.py
+
+      # Runtime dùng bản ĐÃ TỈA từ vựng (`onnx/model_tia113k.onnx`), và bản đó
+      # KHÔNG có trên Hugging Face — phải sinh ra. Thiếu bước này thì
+      # `find_local_snapshot` không thấy file, encoder rơi xuống nhánh tải, và tải
+      # một file không tồn tại.
+      #
+      # Bước này idempotent: snapshot đã có thì script ghi lại y nguyên.
+      - name: Tỉa từ vựng
+        run: uv run python scripts/tia_vocab.py --ngan-sach 120000 --ten tia113k
 
       - name: Ruff
         run: |

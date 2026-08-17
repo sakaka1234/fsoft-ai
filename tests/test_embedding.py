@@ -101,9 +101,18 @@ def test_download_model_khai_bao_giong_het_encoder() -> None:
     spec.loader.exec_module(script)
 
     assert script.ADDITIONAL_FILES == encoder_module._ADDITIONAL_FILES
-    assert script.MODEL_FILE == Settings().ai_embedding_model_file
     assert script.MODEL == Settings().ai_embedding_model
     assert script.DIM == Settings().ai_embedding_dim
+
+    # `download_model.py` tải bản GỐC từ Hugging Face; runtime dùng bản ĐÃ TỈA
+    # từ vựng mà `scripts/tia_vocab.py` sinh ra. Hai file CỐ Ý khác nhau.
+    assert script.MODEL_FILE == encoder_module.MODEL_FILE_GOC
+
+    # Bằng nhau nghĩa là ai đó đã gỡ bước tỉa và service đang chạy bản chưa tỉa —
+    # vẫn đúng kết quả, nhưng ăn thêm 220 MB RAM và quay lại vượt trần 512 MB.
+    assert script.MODEL_FILE != Settings().ai_embedding_model_file, (
+        "File tải về và file runtime đang trùng nhau: bước tỉa từ vựng đã bị bỏ."
+    )
 
 
 def test_nguong_loc_khop_voi_bien_the_onnx_dang_dung() -> None:

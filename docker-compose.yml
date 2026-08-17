@@ -55,18 +55,19 @@ services:
       start_period: 120s
       retries: 5
 
-    # Đo thật với bản model lượng tử (mặc định hiện tại):
-    #   504 MB ổn định  — không nhích lên sau 40 lượt search + 3 lượt quiz
-    #   540 MB đỉnh     — xảy ra LÚC NẠP MODEL, không phải lúc phục vụ
+    # Đo thật với bản tỉa từ vựng (mặc định hiện tại): ĐỈNH 317 MB.
     #
-    # Trần 768 MB để đỉnh lúc khởi động có chỗ, mà rò rỉ thì container vẫn chết
-    # hẳn rồi restart chứ không kéo cả máy xuống.
+    # Trần 512 MB cho biên 195 MB. Đặt đúng bằng trần của gói hosting nhỏ nhất mà
+    # ta nhắm tới, để nếu có rò rỉ bộ nhớ thì nó lộ ra ở đây trước — chứ không
+    # phải lộ ra lần đầu trên production.
     #
-    # Đặt 512 MB là OOM NGAY LÚC KHỞI ĐỘNG vì đỉnh 540 MB — đó cũng là lý do gói
-    # hosting 512 MB không dùng được, xem docs/DOCKER.md mục 13.
-    mem_limit: 768m
+    # Con số này từng là 768m khi service còn dùng bản chưa tỉa (đỉnh 538 MB).
+    # Hạ được xuống 512m là nhờ tỉa bảng từ vựng, xem docs/DOCKER.md mục 13.
+    mem_limit: 512m
 
-    # 1 CPU là đủ: OMP_NUM_THREADS=1 nên embedding vốn chạy đơn luồng.
+    # 1 CPU là đủ. Dockerfile đặt AI_ORT_INTRA_OP_THREADS=1 nên ONNX Runtime
+    # chạy đúng một luồng — KHÔNG phải nhờ OMP_NUM_THREADS như chú thích cũ nói,
+    # biến đó không hề điều khiển ONNX Runtime.
     cpus: 1.0
 
     logging:

@@ -33,30 +33,51 @@ _ADDITIONAL_FILES = [
     "onnx/config.json",
 ]
 
-# Bản lượng tử 8 bit, 113 MB thay vì 448 MB của bản fp32 `onnx/model.onnx`.
+# Bản lượng tử 8 bit ĐÃ TỈA BỚT TỪ VỰNG. Dựng bằng `scripts/tia_vocab.py` từ bản
+# `onnx/model_qint8_avx512_vnni.onnx` của Hugging Face — nó KHÔNG tồn tại trên
+# HF, phải sinh ra lúc build image.
 #
-# Đo trên bộ 40 case: Recall@5 và MRR GIỐNG HỆT bản fp32 (0.971), độ trễ p50 còn
-# nhanh hơn (10,3ms so với 11,7ms), nạp model 1,4 giây thay vì 4,0 giây, và RSS
-# tụt từ 893 MB xuống 498 MB — chênh lệch quyết định việc có nằm vừa gói 512 MB
-# hay không.
+# Đỉnh RSS đo trên bộ 40 case (`scripts/do_bien_the_onnx.py`), hai lần chạy —
+# đọc theo DẢI, chênh lệch giữa hai lần tới 38 MB:
 #
-# ĐÁNH ĐỔI DUY NHẤT, và nó không tự lộ ra: lượng tử hoá làm DỊCH cả phân bố
-# cosine, nên ngưỡng `AI_MIN_SCORE` hiệu chỉnh cho fp32 (0.83) không còn tách
-# được nữa — 2 trong 5 case NEGATIVE bắt đầu trả về kết quả. Ngưỡng của bản này
-# là 0.8344. Đổi model file mà quên đổi ngưỡng thì retrieval kém đi âm thầm.
-# `tests/test_embedding.py` ghim cặp này lại.
+#   biến thể                      file      đỉnh RSS       Recall@5   NEG    nạp
+#   onnx/model.onnx               448 MB    936 / 936 MB    0.9714    1.00   2,5s
+#   onnx/model_O4.onnx            224 MB    697 / 652 MB    0.9714    1.00   1,7-2,3s
+#   onnx/model_qint8_...onnx      118 MB    538 / 504 MB    0.9714    1.00   1,4s
+#   onnx/model_tia113k.onnx        66 MB    317 / 279 MB    0.9714    1.00   0,7s
 #
-# Hậu tố `avx512_vnni` chỉ là tập lệnh mà bản lượng tử được tinh chỉnh cho, KHÔNG
-# phải yêu cầu bắt buộc: số đo ở trên lấy trên Xeon E5-2680 (2012) vốn không có
-# AVX512 nào cả. ONNX Runtime tự lùi về nhân int8 tổng quát.
-_MODEL_FILE_MAC_DINH = "onnx/model_qint8_avx512_vnni.onnx"
+# VÌ SAO TỈA TỪ VỰNG LẠI THẮNG ĐẬM đến vậy, trong khi ba biến thể ONNX kia đều
+# mắc quanh 500 MB: kẻ tốn RAM nhất KHÔNG PHẢI model mà là TOKENIZER.
+# `Tokenizer.from_file` nạp một model Unigram 250.002 token và ăn 250 MB (~1 KB
+# mỗi token), còn `ort.InferenceSession` chỉ ăn 130 MB. Vì 250 MB đó là hằng số
+# không phụ thuộc biến thể ONNX, lượng tử hoá kéo được 936 → 538 rồi tắc. Tỉa từ
+# vựng đánh vào CẢ HAI: tokenizer 250 → 79 MB, session 134 → 82 MB.
+#
+# (Giả thuyết ban đầu — ONNX Runtime giải nén bảng embedding về fp32 — đã bị bác
+# bỏ: bảng vẫn là `uint8 [250037, 384]` cả trong tệp lẫn trong graph sau tối ưu,
+# vì đồ thị là `Gather(bảng_uint8, input_ids)` rồi mới `DequantizeLinear` trên
+# kết quả gather nhỏ. Con số 250002 × 384 × 4 ≈ 384 MB chỉ trùng hợp.)
+#
+# TỈA KHÔNG MẤT CHẤT LƯỢNG vì `scale`/`zero_point` của bảng là VÔ HƯỚNG
+# (per-tensor: 0.010546875 / 128), không per-row — nên chọn hàng trên mảng uint8
+# là phép toán chính xác, token nào được giữ thì vector giống TỪNG BIT.
+_MODEL_FILE_MAC_DINH = "onnx/model_tia113k.onnx"
+
+# Bản gốc trên Hugging Face, dùng làm ĐẦU VÀO cho `scripts/tia_vocab.py`.
+# `scripts/download_model.py` tải đúng file này.
+MODEL_FILE_GOC = "onnx/model_qint8_avx512_vnni.onnx"
 
 # Ngưỡng lọc liên quan đi kèm từng biến thể. Hiệu chỉnh bằng
 # scripts/hieu_chinh_nguong.py trên bộ 40 case.
+#
+# Bản tỉa giữ đúng 0.8344 của bản gốc — hiệu chỉnh lại trên nó ra cùng con số,
+# mất cùng một case (R022), và cả 5 điểm dương thấp nhất lẫn 5 điểm âm trùng tới
+# 4 chữ số. Đó là hệ quả trực tiếp của việc tỉa cho vector giống từng bit.
 MIN_SCORE_THEO_MODEL = {
     "onnx/model.onnx": 0.83,
     "onnx/model_O4.onnx": 0.83,
     "onnx/model_qint8_avx512_vnni.onnx": 0.8344,
+    "onnx/model_tia113k.onnx": 0.8344,
 }
 
 
@@ -130,6 +151,7 @@ class Encoder:
         self._model_name = settings.ai_embedding_model
         self._model_file = settings.ai_embedding_model_file
         self._cpu_arena = settings.ai_onnx_cpu_arena
+        self._intra_op_threads = settings.ai_ort_intra_op_threads
         self._dim = settings.ai_embedding_dim
         self._query_prefix = settings.ai_query_prefix
         self._passage_prefix = settings.ai_passage_prefix
@@ -167,6 +189,14 @@ class Encoder:
         # Truyền tường minh chứ không qua `**dict`: fastembed khai báo vài tham
         # số có kiểu rồi mới tới `**kwargs`, nên mypy đem dict khớp vào tham số
         # đầu tiên còn trống và báo lỗi kiểu sai chỗ.
+        #
+        # `threads` là ĐƯỜNG DUY NHẤT đặt được `intra_op_num_threads`: fastembed
+        # chỉ gọi `so.intra_op_num_threads = threads` khi `threads is not None`
+        # (common/onnx_model.py). Trước đây không truyền gì, nên ONNX Runtime tự
+        # quyết theo số nhân của MÁY CHỦ — trong container bị bóp CPU thì nó mở
+        # thừa luồng rồi tranh nhau. `None` = giữ nguyên hành vi tự quyết.
+        threads = self._intra_op_threads or None
+
         snapshot = find_local_snapshot(self._cache_path, self._model_name, self._model_file)
 
         if snapshot is not None:
@@ -175,6 +205,7 @@ class Encoder:
                 model_name=self._model_name,
                 specific_model_path=str(snapshot),
                 enable_cpu_mem_arena=self._cpu_arena,
+                threads=threads,
             )
 
         else:
@@ -186,6 +217,7 @@ class Encoder:
                 model_name=self._model_name,
                 cache_dir=str(self._cache_path) if self._cache_path else None,
                 enable_cpu_mem_arena=self._cpu_arena,
+                threads=threads,
             )
 
         log.info(
@@ -194,6 +226,7 @@ class Encoder:
             model_file=self._model_file,
             dim=self._dim,
             cpu_arena=self._cpu_arena,
+            intra_op_threads=threads,
         )
 
     async def load(self) -> None:

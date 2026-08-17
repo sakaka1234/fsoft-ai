@@ -41,6 +41,7 @@ nên `find_local_snapshot()` trong encoder tìm thấy bình thường.
 """
 
 import os
+import sys
 from pathlib import Path
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -59,6 +60,11 @@ from fastembed import TextEmbedding
 from fastembed.common.model_description import ModelSource, PoolingType
 from huggingface_hub import snapshot_download
 
+# Script in tiếng Việt có dấu. Trên Windows, stdout chuyển hướng ra file hoặc
+# pipe dùng bảng mã cp1252 và `print` ném UnicodeEncodeError.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 MODEL = os.environ.get("AI_EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
 DIM = int(os.environ.get("AI_EMBEDDING_DIM", "384"))
 # Mặc định là đường dẫn dev. Dockerfile đặt sẵn `ENV FASTEMBED_CACHE_PATH=
@@ -67,10 +73,17 @@ DIM = int(os.environ.get("AI_EMBEDDING_DIM", "384"))
 # khi README bảo là tải vào .cache/fastembed.
 CACHE_PATH = os.environ.get("FASTEMBED_CACHE_PATH", "./.cache/fastembed")
 
-# Phải khớp `ai_embedding_model_file` trong app/config.py. Tải nhầm biến thể thì
-# lúc chạy `find_local_snapshot` không thấy file cần và service đi tải lại giữa
-# lúc khởi động. `tests/test_embedding.py` ghim hai bên phải bằng nhau.
-MODEL_FILE = os.environ.get("AI_EMBEDDING_MODEL_FILE", "onnx/model_qint8_avx512_vnni.onnx")
+# File GỐC trên Hugging Face. CỐ Ý khác `ai_embedding_model_file` trong
+# app/config.py: cái đó là `onnx/model_tia113k.onnx`, một file KHÔNG tồn tại trên
+# HF vì `scripts/tia_vocab.py` sinh ra nó từ chính file này.
+#
+# Hai bước tách rời nhau:
+#   download_model.py  tải bản gốc 118 MB từ HF
+#   tia_vocab.py       tỉa từ vựng, sinh bản 66 MB mà runtime dùng
+#
+# `tests/test_embedding.py` ghim quan hệ này để không ai vô tình cho chúng bằng
+# nhau — bằng nhau nghĩa là service chạy bản chưa tỉa và ăn thêm 220 MB RAM.
+MODEL_FILE = os.environ.get("AI_EMBEDDING_MODEL_FILE_GOC", "onnx/model_qint8_avx512_vnni.onnx")
 
 ADDITIONAL_FILES = [
     "onnx/tokenizer.json",

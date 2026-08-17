@@ -10,16 +10,25 @@ kém chất lượng" bằng số đo thay vì phỏng đoán.
 Mỗi biến thể chạy trong MỘT TIẾN TRÌNH RIÊNG. RSS là số cộng dồn: nạp hai model
 trong cùng process thì con số thứ hai vô nghĩa.
 
-Kết quả đo ngày 17/08/2026 trên Xeon E5-2680 (2012, KHÔNG có AVX512):
+Kết quả đo ngày 17/08/2026 trên Xeon E5-2680 (2012, KHÔNG có AVX512), hai lần
+chạy — cột RSS là ĐỈNH nên nó dao động theo phân bổ nhất thời:
 
-    biến thể                          RSS      Recall@5  NEGATIVE  p50
-    onnx/model.onnx        448 MB   893 MB     0.971      1.00    11.7ms
-    onnx/model_O4.onnx     224 MB   707 MB     0.971      1.00    12.2ms
-    onnx/..._qint8...onnx  113 MB   498 MB     0.971      1.00    10.3ms
+    biến thể                 file      đỉnh RSS      Recall@5  NEG    nạp
+    onnx/model.onnx          448 MB    936 / 936 MB   0.971    1.00   2,5s
+    onnx/model_O4.onnx       224 MB    697 / 652 MB   0.971    1.00   1,7-2,3s
+    onnx/..._qint8...onnx    118 MB    538 / 504 MB   0.971    1.00   1,4s
+    onnx/model_tia113k.onnx   66 MB    317 / 279 MB   0.971    1.00   0,7s
+
+Đọc theo DẢI, đừng ghim một con số: chênh lệch giữa hai lần chạy tới 38 MB. Khi
+lập kế hoạch dung lượng thì lấy đầu CAO của dải.
 
 Bản int8 chỉ giữ được NEGATIVE=1.00 SAU KHI hiệu chỉnh lại AI_MIN_SCORE lên
-0.8344; dùng ngưỡng 0.83 của fp32 thì nó tụt xuống 0.60. Xem
+0.8344; dùng ngưỡng 0.83 của fp32 thì nó tụt xuống 0.60. Bản tỉa giữ đúng 0.8344
+đó — tỉa cho vector giống từng bit nên phân bố không dịch. Xem
 scripts/hieu_chinh_nguong.py.
+
+Bản `tia113k` KHÔNG có trên Hugging Face; dựng bằng:
+    uv run python scripts/tia_vocab.py --ngan-sach 120000 --ten tia113k
 """
 
 import json
@@ -28,17 +37,36 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Script in tiếng Việt có dấu. Trên Windows, stdout chuyển hướng ra file hoặc
+# pipe dùng bảng mã cp1252 và `print` ném UnicodeEncodeError.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 BIEN_THE = [
     ("onnx/model.onnx", 0.83),
     ("onnx/model_O4.onnx", 0.83),
     ("onnx/model_qint8_avx512_vnni.onnx", 0.8344),
+    # Bản tỉa vocab. Dựng bằng scripts/tia_vocab.py, nằm ở snapshot riêng nên
+    # chỉ đo được sau khi đã chạy script đó.
+    ("onnx/model_tia113k.onnx", 0.8344),
 ]
 
 
 def rss_mb() -> float:
-    """RSS hiện tại, MB. Hai nền tảng hai đường khác nhau."""
+    """
+    RSS ĐỈNH của tiến trình, MB.
+
+    Phải là ĐỈNH chứ không phải hiện tại. Bản trước đọc `WorkingSetSize` (hiện
+    tại) trên Windows nhưng `ru_maxrss` (đỉnh) trên Linux — hai đại lượng khác
+    nhau, nên số của hai nền tảng không so sánh được với nhau.
+
+    Sai lệch đó không vô hại: nó làm báo cáo ghi 504 MB trong khi đỉnh thật là
+    538 MB, tức là kết luận "vừa trần 512 MB" trong khi thực tế vượt 26 MB — và
+    OOM thì luôn xảy ra ở ĐỈNH. Đỉnh của service này rơi vào lần đồng bộ đầy đầu
+    tiên, lúc SQLite còn trống và syncer phải embed toàn bộ thẻ.
+    """
 
     if os.name == "nt":
         import ctypes
@@ -77,11 +105,11 @@ def rss_mb() -> float:
             kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
         )
 
-        return counters.WorkingSetSize / 1024 / 1024
+        return counters.PeakWorkingSetSize / 1024 / 1024
 
     import resource
 
-    # Linux trả kilobyte, macOS trả byte.
+    # ru_maxrss vốn đã là ĐỈNH. Linux trả kilobyte, macOS trả byte.
     thoi = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
     return thoi / 1024 if sys.platform == "linux" else thoi / 1024 / 1024

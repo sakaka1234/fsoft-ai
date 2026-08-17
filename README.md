@@ -331,14 +331,32 @@ nhiều replica sẽ chạy nhiều vòng lặp đồng bộ chồng lên nhau.
 Gắn volume cho `AI_DB_PATH=/data/fsoft-ai.db`. Mất file này không phải thảm hoạ — service
 tự đồng bộ lại từ backend — nhưng phải embed lại toàn bộ.
 
-**RAM: 504 MB khi chạy, đỉnh 540 MB lúc nạp model.** Trước đây là 893 MB — đã giảm 44% bằng
-bản model ONNX lượng tử 8 bit, giữ nguyên Recall@5 và MRR, lại nhanh hơn.
+**RAM: đỉnh 317 MB.** Trước đây 936 MB — giảm **66%** qua hai bước, giữ nguyên Recall@5 và
+MRR, lại nạp nhanh hơn ba lần:
 
-Vì đỉnh là 540 MB nên **gói 512 MB không dùng được** (OOM ngay lúc khởi động). Cần tối thiểu
-768 MB. Bảng so sánh ba biến thể và danh sách gói hosting dùng được ở
+| Biến thể | File | Đỉnh RSS |
+|---|---|---|
+| `onnx/model.onnx` fp32 | 448 MB | 936 MB |
+| `onnx/model_qint8_avx512_vnni.onnx` | 118 MB | 538 MB |
+| **`onnx/model_tia113k.onnx`** ← mặc định | **66 MB** | **317 MB** |
+
+Bước thứ hai mới là bước quyết định, và nó không nhắm vào model: **kẻ tốn RAM nhất là
+tokenizer**, không phải model. `Tokenizer.from_file` nạp một bảng Unigram 250.002 token và ăn
+**250 MB** (~1 KB mỗi token), còn `ort.InferenceSession` chỉ ăn 130 MB. Vì 250 MB đó là hằng số
+không phụ thuộc biến thể ONNX, lượng tử hoá kéo được 936 → 538 rồi tắc. `scripts/tia_vocab.py`
+tỉa bảng xuống 113k token, đánh vào **cả hai** chỗ.
+
+Tỉa không mất chất lượng vì `scale`/`zero_point` của bảng là vô hướng per-tensor, nên chọn hàng
+trên mảng uint8 là phép toán chính xác — token nào được giữ thì vector **giống từng bit**.
+
+Gói 512 MB giờ dùng được. Chi tiết và danh sách nơi chạy được ở
 [docs/DOCKER.md mục 13](docs/DOCKER.md).
 
 > **Đổi `AI_EMBEDDING_MODEL_FILE` là phải đổi kèm `AI_MIN_SCORE` và `AI_MODEL_VERSION`.**
 > Lượng tử hoá làm dịch phân bố cosine; sai cặp thì cổng lọc liên quan sai âm thầm — đo thật,
 > bản lượng tử dùng ngưỡng của fp32 làm 2 trong 5 case NEGATIVE hỏng. Bảng ngưỡng ở
 > `app/embedding/encoder.py`, và có test ghim lại.
+
+> **`AI_EMBED_BATCH_SIZE` cũng không vô hại.** Nó đổi kết quả embedding qua nhiễu padding, và
+> cổng NEGATIVE hiện cách mép đúng 4,7e-4. Hạ batch 32 → 8 làm NEGATIVE tụt 1.000 → 0.800 mà
+> không có lỗi nào báo.

@@ -13,6 +13,12 @@ dependencies = [
     "fastembed>=0.8.0",
     "httpx>=0.28.1",
     "numpy>=2.5.2",
+    # CHỈ dùng lúc build image, runtime không bao giờ import. Vẫn để ở deps
+    # chính chứ không phải nhóm dev, vì `scripts/tia_vocab.py` chạy trong
+    # Dockerfile SAU `uv sync --no-dev` — mà nhóm dev thì đã bị loại ở đó.
+    # Cái giá là ~20 MB đĩa trong ảnh; đổi lấy việc bước tỉa dùng đúng một
+    # interpreter với mọi thứ khác, không phải luồn qua môi trường phủ tạm.
+    "onnx>=1.22.0",
     "openai>=3.1.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",

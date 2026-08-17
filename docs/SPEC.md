@@ -1193,7 +1193,12 @@ Kết quả: `docs/M0_FINDINGS.md`.
    - `embed_query(text)`, `embed_passages(texts)`
    - Xử lý prefix **theo đúng kết luận trong `docs/M0_FINDINGS.md`**
    - Chạy trong threadpool (`anyio.to_thread.run_sync`)
-   - Set `OMP_NUM_THREADS` / `ORT_NUM_THREADS` **trước** khi import fastembed
+   - **ĐÍNH CHÍNH (đo được ở M7):** `ORT_NUM_THREADS` KHÔNG điều khiển ONNX Runtime.
+     ORT không đọc biến môi trường nào để lấy số luồng, nó chỉ nhận qua
+     `SessionOptions.intra_op_num_threads` — mà fastembed chỉ đặt trường đó khi được
+     truyền `threads`. Đặt hai biến rồi tưởng đã giới hạn 1 luồng là sai: session vẫn
+     sinh thêm 7 luồng OS. Đường đúng là `AI_ORT_INTRA_OP_THREADS`, do `Encoder` truyền
+     xuống. `OMP_NUM_THREADS` thì có tác dụng thật — nó giới hạn BLAS của numpy.
 10. `app/embedding/vector_index.py` — numpy index theo [mục 5.6](#56-vector-store--numpy-trong-ram), có `upsert`, `delete`, `search`, `stats`, thread-safe.
 11. `app/sync/syncer.py` — task nền `asyncio`:
     - Vòng lặp gia tăng 120 giây theo [mục 5.4](#54-đồng-bộ-dữ-liệu--kéo-qua-http-không-webhook), có chồng lấn 5 giây
@@ -1743,25 +1748,51 @@ Không sao. Embedding là dữ liệu dẫn xuất. Service khởi động thấ
 
 **M0 đo 784 MB** ngay sau khi nạp model (`docs/M0_FINDINGS.md` mục 2.6). Container Linux thật sau đó xác nhận **881,5 MB** cho cả service — vượt mọi gói hosting free.
 
-**Đã xử lý bằng bản ONNX lượng tử 8 bit.** Đo lại cả ba biến thể, mỗi cái một tiến trình riêng (`scripts/do_bien_the_onnx.py`):
+**Đã xử lý hai bước: lượng tử hoá, rồi TỈA TỪ VỰNG.** Đo bằng `scripts/do_bien_the_onnx.py`, mỗi biến thể một tiến trình riêng, lấy **ĐỈNH** RSS:
 
-| Biến thể | File | RSS chạy | Recall@5 | MRR | NEGATIVE | p50 | Nạp |
+| Biến thể | File | Đỉnh RSS | Recall@5 | MRR | NEGATIVE | p50 | Nạp |
 |---|---|---|---|---|---|---|---|
-| `onnx/model.onnx` | 448 MB | 893 MB | 0.971 | 0.971 | 1.00 | 11,7ms | 4,02s |
-| `onnx/model_O4.onnx` | 224 MB | 707 MB | 0.971 | 0.971 | 1.00 | 12,4ms | 1,87s |
-| **`onnx/model_qint8_avx512_vnni.onnx`** | **113 MB** | **504 MB** | **0.971** | **0.971** | **1.00** | **10,3ms** | **1,45s** |
+| `onnx/model.onnx` | 448 MB | 935,8 MB | 0.971 | 0.971 | 1.00 | 10,9ms | 2,48s |
+| `onnx/model_O4.onnx` | 224 MB | 696,7 MB | 0.971 | 0.971 | 1.00 | 11,2ms | 2,31s |
+| `onnx/model_qint8_avx512_vnni.onnx` | 118 MB | 537,8 MB | 0.971 | 0.971 | 1.00 | 9,2ms | 1,45s |
+| **`onnx/model_tia113k.onnx`** | **66 MB** | **317,0 MB** | **0.971** | **0.971** | **1.00** | **9,0ms** | **0,76s** |
 
-Chốt bản lượng tử làm **mặc định**. Nó không đánh đổi gì về chất lượng: Recall@5 và MRR giống hệt bản fp32, độ trễ còn thấp hơn.
+Chốt bản **tỉa từ vựng** làm mặc định. Không đánh đổi gì: mọi chỉ số giống hệt bản fp32, nạp nhanh hơn ba lần.
 
-Hai điều phát hiện khi đo:
+#### Vì sao lượng tử hoá một mình thì tắc ở 538 MB
 
-1. **Hậu tố `avx512_vnni` không phải yêu cầu bắt buộc.** Số đo ở trên lấy trên Xeon E5-2680 (2012), một CPU không có AVX512 nào cả — ONNX Runtime tự lùi về nhân int8 tổng quát và vẫn nhanh hơn fp32.
+Vì kẻ tốn RAM nhất **không phải model mà là TOKENIZER**:
 
-2. **Lượng tử hoá DỊCH phân bố cosine, nên `AI_MIN_SCORE` phải hiệu chỉnh lại.** Giữ ngưỡng 0.83 của fp32 thì **2 trong 5 case NEGATIVE hỏng** — câu lẽ ra trả rỗng bắt đầu trả về thẻ bừa, service vẫn 200, không log lỗi nào. Ngưỡng đúng cho bản lượng tử là **0.8344** (`scripts/hieu_chinh_nguong.py`). Cặp (biến thể, ngưỡng) được ghim bằng test và có cảnh báo lúc khởi tạo `Settings`.
+| | RAM |
+|---|---|
+| `Tokenizer.from_file` — Unigram 250.002 token | **250 MB** |
+| `ort.InferenceSession` — model int8 | 130 MB |
 
-Ngoài ra tắt bộ cấp phát arena của ONNX Runtime (`AI_ONNX_CPU_ARENA=false`) tiết kiệm thêm ~47 MB, độ trễ không đổi.
+`tokenizers` (Rust) dùng khoảng **1 KB RAM cho mỗi token**, và 250 MB đó là **hằng số không phụ thuộc biến thể ONNX**. Đó là lý do lượng tử hoá kéo được 936 → 697 → 538 rồi không xuống nữa, và là lý do **đổi sang model khác cùng họ XLM-R sẽ không cứu được gì** — mọi model đa ngữ đủ mạnh cho tiếng Việt (e5-base/large, paraphrase-multilingual, bge-m3, gte-multilingual, jina-v3) đều dùng đúng tokenizer 250k đó.
 
-**Vẫn phải nhớ:** đỉnh RSS là **540 MB** và nó xảy ra lúc nạp model, nên **gói 512 MB vẫn không dùng được** — OOM trước khi phục vụ được request đầu tiên. Cần tối thiểu 768 MB. Phần sàn khoảng 354 MB là `onnxruntime` + `numpy` + tokenizer, không giảm được nữa mà không bỏ hẳn embedding cục bộ. Danh sách gói dùng được ở `docs/DOCKER.md` mục 13.
+Một giả thuyết đã bị **bác bỏ** trên đường đi: ONNX Runtime KHÔNG giải nén bảng embedding về fp32. Bảng vẫn là `uint8 [250037, 384]` cả trong tệp lẫn trong graph sau tối ưu, vì đồ thị là `Gather(bảng_uint8, input_ids)` **rồi mới** `DequantizeLinear` trên kết quả gather nhỏ. Đổi `graph_optimization_level` qua cả bốn mức: 131/130/133/132 MB. Con số 250002 × 384 × 4 ≈ 384 MB trùng với mức tăng 377 MB đo được chỉ là **trùng hợp**.
+
+#### Tỉa từ vựng: đánh vào cả hai chỗ
+
+`scripts/tia_vocab.py` giữ 113.302 trong 250.002 token: tokenizer 250 → 79 MB, session 134 → 82 MB.
+
+**Không mất chất lượng** vì `scale`/`zero_point` của bảng là **vô hướng per-tensor** (0.010546875 / 128), không per-row — nên chọn hàng trên mảng uint8 là phép toán chính xác: token nào được giữ thì vector **giống từng bit**. Chỉ cần `onnx` + `numpy` lúc offline, không cần `torch`.
+
+Chốt chặn chống `<unk>`: tokenizer này **không có `byte_fallback`**, nên script giữ **toàn bộ piece đơn ký tự** thuộc bảng chữ Latin/Việt/IPA (846 piece). Từ lạ tệ nhất cũng rã thành từng ký tự chứ không bao giờ thành `<unk>`. Đo trên ngữ liệu và trên tập holdout: `unk = 0.0`, `phinh_token = 1.0`, `case_lech_chuoi_token = 0`.
+
+Một cái bẫy đã thực sự sập khi làm: token duy nhất trong toàn ngữ liệu không lọt bộ lọc ký tự là `θ` (U+03B8), đến từ phiên âm `/ˌfəʊtəʊˈsɪnθəsɪs/` — trường `phonetic` CÓ đi vào text embed. Nó chỉ sống sót nhờ tình cờ có một thẻ chứa nó. Script giờ giữ tường minh bốn chữ Hy Lạp mà IPA vay mượn (`θβγχ`) chứ không mở cả khối Hy Lạp.
+
+#### Ba điều khác phát hiện khi đo
+
+1. **Hậu tố `avx512_vnni` không phải yêu cầu bắt buộc.** Số đo lấy trên Xeon E5-2680 (2012), CPU không có AVX512 nào cả — ONNX Runtime tự lùi về nhân int8 tổng quát và vẫn nhanh hơn fp32.
+
+2. **Lượng tử hoá DỊCH phân bố cosine, nên `AI_MIN_SCORE` phải hiệu chỉnh lại.** Giữ ngưỡng 0.83 của fp32 thì **2 trong 5 case NEGATIVE hỏng** — service vẫn 200, không log lỗi nào. Ngưỡng đúng là **0.8344**, và bản tỉa giữ đúng con số đó (hiệu chỉnh lại trên nó ra cùng kết quả, mất cùng một case R022). Cặp (biến thể, ngưỡng) được ghim bằng test và có cảnh báo lúc khởi tạo `Settings`.
+
+3. **`AI_EMBED_BATCH_SIZE` không phải cái núm vô hại.** Nó đổi kết quả embedding qua nhiễu padding, và cổng NEGATIVE hiện cách mép đúng **4,7e-4** (case R038, thẻ 204: 0.833929 so với 0.8344). Hạ batch 32 → 8 làm NEGATIVE tụt từ 1.000 xuống 0.800 **mà không có lỗi nào báo**. Mọi lần đổi batch đều phải chạy lại `scripts/hieu_chinh_nguong.py`.
+
+Ngoài ra tắt bộ cấp phát arena (`AI_ONNX_CPU_ARENA=false`) tiết kiệm ~47 MB, độ trễ không đổi.
+
+**Kết quả:** đỉnh 317 MB, biên 195 MB so với trần 512 MB. Gói 512 MB giờ **dùng được**. Phần sàn khoảng 91–111 MB là `onnxruntime` + `numpy`; muốn xuống nữa thì phải thay hẳn backend tokenizer sang `sentencepiece` (đo được thêm ~137 MB) — chưa làm vì phải tự viết lại encoder và nhân bản đúng quirk pad-id-0 của fastembed.
 
 ### 14.7 Rủi ro phạm vi Sprint
 
