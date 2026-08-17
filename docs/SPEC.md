@@ -1739,13 +1739,29 @@ Không chặn được gì cả — `AI_SOURCE_MODE=fixture` cho phép làm hế
 
 Không sao. Embedding là dữ liệu dẫn xuất. Service khởi động thấy DB rỗng sẽ tự kéo và embed lại toàn bộ. 10.000 thẻ khoảng 50 giây cộng thời gian tải qua HTTP. Gắn volume Railway để tránh, nhưng không bắt buộc.
 
-### 14.6 RAM Railway
+### 14.6 RAM — ĐÃ XỬ LÝ, giảm 44%
 
-**M0 đo thật: 784 MB** ngay sau khi nạp model (`docs/M0_FINDINGS.md` mục 2.6) — chạm trần trên của ước tính 600–900 MB, và đó mới chỉ là process embedding trần, chưa có FastAPI, vector index hay BM25 index.
+**M0 đo 784 MB** ngay sau khi nạp model (`docs/M0_FINDINGS.md` mục 2.6). Container Linux thật sau đó xác nhận **881,5 MB** cho cả service — vượt mọi gói hosting free.
 
-Kết luận: **plan Railway 512 MB không đủ.** Nếu chật, dùng bản ONNX quantized (giảm khoảng bốn lần) trước khi nghĩ tới nâng plan.
+**Đã xử lý bằng bản ONNX lượng tử 8 bit.** Đo lại cả ba biến thể, mỗi cái một tiến trình riêng (`scripts/do_bien_the_onnx.py`):
 
-Con số trên đo trên Windows. Phải đo lại trên container Linux ở cuối M1 để chốt plan.
+| Biến thể | File | RSS chạy | Recall@5 | MRR | NEGATIVE | p50 | Nạp |
+|---|---|---|---|---|---|---|---|
+| `onnx/model.onnx` | 448 MB | 893 MB | 0.971 | 0.971 | 1.00 | 11,7ms | 4,02s |
+| `onnx/model_O4.onnx` | 224 MB | 707 MB | 0.971 | 0.971 | 1.00 | 12,4ms | 1,87s |
+| **`onnx/model_qint8_avx512_vnni.onnx`** | **113 MB** | **504 MB** | **0.971** | **0.971** | **1.00** | **10,3ms** | **1,45s** |
+
+Chốt bản lượng tử làm **mặc định**. Nó không đánh đổi gì về chất lượng: Recall@5 và MRR giống hệt bản fp32, độ trễ còn thấp hơn.
+
+Hai điều phát hiện khi đo:
+
+1. **Hậu tố `avx512_vnni` không phải yêu cầu bắt buộc.** Số đo ở trên lấy trên Xeon E5-2680 (2012), một CPU không có AVX512 nào cả — ONNX Runtime tự lùi về nhân int8 tổng quát và vẫn nhanh hơn fp32.
+
+2. **Lượng tử hoá DỊCH phân bố cosine, nên `AI_MIN_SCORE` phải hiệu chỉnh lại.** Giữ ngưỡng 0.83 của fp32 thì **2 trong 5 case NEGATIVE hỏng** — câu lẽ ra trả rỗng bắt đầu trả về thẻ bừa, service vẫn 200, không log lỗi nào. Ngưỡng đúng cho bản lượng tử là **0.8344** (`scripts/hieu_chinh_nguong.py`). Cặp (biến thể, ngưỡng) được ghim bằng test và có cảnh báo lúc khởi tạo `Settings`.
+
+Ngoài ra tắt bộ cấp phát arena của ONNX Runtime (`AI_ONNX_CPU_ARENA=false`) tiết kiệm thêm ~47 MB, độ trễ không đổi.
+
+**Vẫn phải nhớ:** đỉnh RSS là **540 MB** và nó xảy ra lúc nạp model, nên **gói 512 MB vẫn không dùng được** — OOM trước khi phục vụ được request đầu tiên. Cần tối thiểu 768 MB. Phần sàn khoảng 354 MB là `onnxruntime` + `numpy` + tokenizer, không giảm được nữa mà không bỏ hẳn embedding cục bộ. Danh sách gói dùng được ở `docs/DOCKER.md` mục 13.
 
 ### 14.7 Rủi ro phạm vi Sprint
 

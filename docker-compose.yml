@@ -55,10 +55,16 @@ services:
       start_period: 120s
       retries: 5
 
-    # RSS đo được khoảng 784 MB, phần lớn là model ONNX. Đặt trần 1 GB để nếu rò
-    # rỉ bộ nhớ thì container chết hẳn và restart, thay vì kéo cả máy xuống.
-    # Đặt dưới 900 MB là OOM ngay lúc nạp model.
-    mem_limit: 1g
+    # Đo thật với bản model lượng tử (mặc định hiện tại):
+    #   504 MB ổn định  — không nhích lên sau 40 lượt search + 3 lượt quiz
+    #   540 MB đỉnh     — xảy ra LÚC NẠP MODEL, không phải lúc phục vụ
+    #
+    # Trần 768 MB để đỉnh lúc khởi động có chỗ, mà rò rỉ thì container vẫn chết
+    # hẳn rồi restart chứ không kéo cả máy xuống.
+    #
+    # Đặt 512 MB là OOM NGAY LÚC KHỞI ĐỘNG vì đỉnh 540 MB — đó cũng là lý do gói
+    # hosting 512 MB không dùng được, xem docs/DOCKER.md mục 13.
+    mem_limit: 768m
 
     # 1 CPU là đủ: OMP_NUM_THREADS=1 nên embedding vốn chạy đơn luồng.
     cpus: 1.0

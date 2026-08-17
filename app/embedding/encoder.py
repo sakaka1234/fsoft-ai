@@ -33,14 +33,40 @@ _ADDITIONAL_FILES = [
     "onnx/config.json",
 ]
 
-_MODEL_FILE = "onnx/model.onnx"
+# Bản lượng tử 8 bit, 113 MB thay vì 448 MB của bản fp32 `onnx/model.onnx`.
+#
+# Đo trên bộ 40 case: Recall@5 và MRR GIỐNG HỆT bản fp32 (0.971), độ trễ p50 còn
+# nhanh hơn (10,3ms so với 11,7ms), nạp model 1,4 giây thay vì 4,0 giây, và RSS
+# tụt từ 893 MB xuống 498 MB — chênh lệch quyết định việc có nằm vừa gói 512 MB
+# hay không.
+#
+# ĐÁNH ĐỔI DUY NHẤT, và nó không tự lộ ra: lượng tử hoá làm DỊCH cả phân bố
+# cosine, nên ngưỡng `AI_MIN_SCORE` hiệu chỉnh cho fp32 (0.83) không còn tách
+# được nữa — 2 trong 5 case NEGATIVE bắt đầu trả về kết quả. Ngưỡng của bản này
+# là 0.8344. Đổi model file mà quên đổi ngưỡng thì retrieval kém đi âm thầm.
+# `tests/test_embedding.py` ghim cặp này lại.
+#
+# Hậu tố `avx512_vnni` chỉ là tập lệnh mà bản lượng tử được tinh chỉnh cho, KHÔNG
+# phải yêu cầu bắt buộc: số đo ở trên lấy trên Xeon E5-2680 (2012) vốn không có
+# AVX512 nào cả. ONNX Runtime tự lùi về nhân int8 tổng quát.
+_MODEL_FILE_MAC_DINH = "onnx/model_qint8_avx512_vnni.onnx"
+
+# Ngưỡng lọc liên quan đi kèm từng biến thể. Hiệu chỉnh bằng
+# scripts/hieu_chinh_nguong.py trên bộ 40 case.
+MIN_SCORE_THEO_MODEL = {
+    "onnx/model.onnx": 0.83,
+    "onnx/model_O4.onnx": 0.83,
+    "onnx/model_qint8_avx512_vnni.onnx": 0.8344,
+}
 
 
 def _is_registered(model_name: str) -> bool:
     return any(item.get("model") == model_name for item in TextEmbedding.list_supported_models())
 
 
-def register_custom_model(model_name: str, dim: int) -> None:
+def register_custom_model(
+    model_name: str, dim: int, model_file: str = _MODEL_FILE_MAC_DINH
+) -> None:
     """
     Đăng ký model vào registry của fastembed.
 
@@ -57,22 +83,28 @@ def register_custom_model(model_name: str, dim: int) -> None:
         normalization=True,
         sources=ModelSource(hf=model_name),
         dim=dim,
-        model_file=_MODEL_FILE,
+        model_file=model_file,
         description="Multilingual E5 Small",
         license="MIT",
         size_in_gb=0.5,
         additional_files=_ADDITIONAL_FILES,
     )
 
-    log.info("custom_model_registered", model=model_name, dim=dim)
+    log.info("custom_model_registered", model=model_name, dim=dim, model_file=model_file)
 
 
-def find_local_snapshot(cache_path: Path | None, model_name: str) -> Path | None:
+def find_local_snapshot(
+    cache_path: Path | None, model_name: str, model_file: str = _MODEL_FILE_MAC_DINH
+) -> Path | None:
     """
     Tìm snapshot đã tải sẵn trong cache.
 
     Không hard-code commit SHA: HF có thể cập nhật repo và sinh snapshot mới.
     Có nhiều snapshot thì lấy bản mới nhất theo mtime.
+
+    Snapshot chỉ được coi là hợp lệ khi chứa ĐÚNG biến thể đang dùng. Một cache
+    có sẵn `model.onnx` nhưng thiếu bản lượng tử phải bị coi là không có, để rơi
+    xuống nhánh tải chứ không nạp nhầm biến thể.
     """
 
     if cache_path is None:
@@ -83,7 +115,7 @@ def find_local_snapshot(cache_path: Path | None, model_name: str) -> Path | None
     if not snapshots_dir.is_dir():
         return None
 
-    valid = [p for p in snapshots_dir.iterdir() if p.is_dir() and (p / _MODEL_FILE).exists()]
+    valid = [p for p in snapshots_dir.iterdir() if p.is_dir() and (p / model_file).exists()]
 
     if not valid:
         return None
@@ -96,6 +128,8 @@ def find_local_snapshot(cache_path: Path | None, model_name: str) -> Path | None
 class Encoder:
     def __init__(self, settings: Settings) -> None:
         self._model_name = settings.ai_embedding_model
+        self._model_file = settings.ai_embedding_model_file
+        self._cpu_arena = settings.ai_onnx_cpu_arena
         self._dim = settings.ai_embedding_dim
         self._query_prefix = settings.ai_query_prefix
         self._passage_prefix = settings.ai_passage_prefix
@@ -120,28 +154,47 @@ class Encoder:
     # ---------------------------------------------------------------
 
     def load_sync(self) -> None:
-        register_custom_model(self._model_name, self._dim)
+        register_custom_model(self._model_name, self._dim, self._model_file)
 
-        snapshot = find_local_snapshot(self._cache_path, self._model_name)
+        # fastembed chuyển tiếp `enable_cpu_mem_arena` xuống `ort.SessionOptions`
+        # (EXPOSED_SESSION_OPTIONS trong fastembed/common/onnx_model.py).
+        #
+        # Bộ cấp phát arena của ONNX Runtime giữ lại vùng nhớ đã xin để lần suy
+        # luận sau khỏi xin lại. Với batch lớn thì đáng, nhưng ở đây batch là 32
+        # câu ngắn nên nó chỉ giữ chỗ vô ích: đo được thêm khoảng 47 MB RSS mà
+        # độ trễ không đổi (10,2ms so với 10,0ms — trong khoảng nhiễu).
+        #
+        # Truyền tường minh chứ không qua `**dict`: fastembed khai báo vài tham
+        # số có kiểu rồi mới tới `**kwargs`, nên mypy đem dict khớp vào tham số
+        # đầu tiên còn trống và báo lỗi kiểu sai chỗ.
+        snapshot = find_local_snapshot(self._cache_path, self._model_name, self._model_file)
 
         if snapshot is not None:
             log.info("encoder_loading", source="local_snapshot", path=str(snapshot))
             self._model = TextEmbedding(
                 model_name=self._model_name,
                 specific_model_path=str(snapshot),
+                enable_cpu_mem_arena=self._cpu_arena,
             )
 
         else:
-            # Không có sẵn thì fastembed tự tải từ Hugging Face — chậm (470 MB)
+            # Không có sẵn thì fastembed tự tải từ Hugging Face — chậm (113 MB)
             # nhưng service vẫn chạy được. Trong Docker, model đã nạp sẵn lúc
             # build image nên nhánh này không bao giờ chạy ở production.
             log.warning("encoder_loading", source="huggingface_download")
             self._model = TextEmbedding(
                 model_name=self._model_name,
                 cache_dir=str(self._cache_path) if self._cache_path else None,
+                enable_cpu_mem_arena=self._cpu_arena,
             )
 
-        log.info("encoder_loaded", model=self._model_name, dim=self._dim)
+        log.info(
+            "encoder_loaded",
+            model=self._model_name,
+            model_file=self._model_file,
+            dim=self._dim,
+            cpu_arena=self._cpu_arena,
+        )
 
     async def load(self) -> None:
         await anyio.to_thread.run_sync(self.load_sync)

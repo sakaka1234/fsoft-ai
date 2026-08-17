@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/config.py -> app/ -> gốc repo
@@ -61,8 +62,19 @@ class Settings(BaseSettings):
 
     # ---- Embedding ----
     ai_embedding_model: str = "intfloat/multilingual-e5-small"
+    # Biến thể ONNX. Mặc định là bản lượng tử 8 bit: 113 MB thay vì 448 MB, RSS
+    # 498 MB thay vì 893 MB, cùng chỉ số Recall@5/MRR, lại nhanh hơn.
+    #
+    # ĐỔI GIÁ TRỊ NÀY LÀ PHẢI ĐỔI KÈM `ai_min_score` VÀ `ai_model_version`:
+    # mỗi biến thể có phân bố cosine riêng, và vector cũ không dùng lại được.
+    # Bảng ngưỡng ở `app/embedding/encoder.py`; sai cặp thì retrieval kém đi âm
+    # thầm chứ không báo lỗi. `Settings` tự kiểm cặp này lúc khởi tạo.
+    ai_embedding_model_file: str = "onnx/model_qint8_avx512_vnni.onnx"
     ai_embedding_dim: int = 384
-    ai_model_version: str = "multilingual-e5-small@t1"
+    ai_model_version: str = "multilingual-e5-small-q8@t1"
+    # Bộ cấp phát arena của ONNX Runtime. Tắt tiết kiệm ~47 MB RSS mà độ trễ
+    # không đổi — batch ở đây quá nhỏ để arena có ích.
+    ai_onnx_cpu_arena: bool = False
     ai_query_prefix: str = "query: "
     ai_passage_prefix: str = "passage: "
     ai_embed_batch_size: int = 32
@@ -80,7 +92,7 @@ class Settings(BaseSettings):
     # Cổng lọc liên quan trên điểm cosine của tầng semantic. Hiệu chỉnh từ số
     # đo thật trên bộ 40 case, KHÔNG phải con số 0.35 phỏng đoán ban đầu —
     # E5 nén điểm vào dải 0.80-0.95 nên 0.35 không lọc được gì.
-    ai_min_score: float = 0.83
+    ai_min_score: float = 0.8344
     ai_intent_threshold: float = 0.50
     # Biên độ tối thiểu giữa hạng nhất và hạng nhì khi phân loại intent bằng
     # centroid. KHÔNG phải ngưỡng tuyệt đối — xem docs/M0_FINDINGS.md muc 2.5.
@@ -115,6 +127,37 @@ class Settings(BaseSettings):
 
     # ---- Demo mode ----
     ai_demo_mode: bool = False
+
+    @model_validator(mode="after")
+    def _canh_cap_model_va_nguong(self) -> "Settings":
+        """
+        Cảnh báo khi biến thể ONNX và `AI_MIN_SCORE` không đi cùng nhau.
+
+        Đây là kiểu hỏng tệ nhất của hệ thống này: không exception, không log
+        lỗi, service vẫn trả 200 — chỉ là cổng lọc liên quan không còn tách được
+        và những câu lẽ ra trả rỗng bắt đầu trả về thẻ bừa. Đo thật: dùng bản
+        lượng tử với ngưỡng 0.83 của fp32 làm 2 trong 5 case NEGATIVE hỏng.
+
+        Chỉ CẢNH BÁO chứ không chặn: ngưỡng là thứ được phép chỉnh tay khi hiệu
+        chỉnh lại trên bộ thẻ thật, không nên khoá cứng.
+        """
+
+        from app.embedding.encoder import MIN_SCORE_THEO_MODEL
+
+        mong_doi = MIN_SCORE_THEO_MODEL.get(self.ai_embedding_model_file)
+
+        if mong_doi is not None and abs(self.ai_min_score - mong_doi) > 1e-6:
+            import warnings
+
+            warnings.warn(
+                f"AI_MIN_SCORE={self.ai_min_score} không phải ngưỡng đã hiệu chỉnh cho "
+                f"{self.ai_embedding_model_file} (mong đợi {mong_doi}). Nếu đây là cố ý "
+                "thì bỏ qua; nếu không, cổng lọc liên quan sẽ sai âm thầm — xem "
+                "MIN_SCORE_THEO_MODEL trong app/embedding/encoder.py.",
+                stacklevel=2,
+            )
+
+        return self
 
 
 @lru_cache

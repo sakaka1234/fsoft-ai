@@ -12,11 +12,10 @@
 - **Docker Engine 20.10+** kèm plugin Compose v2 (`docker compose`, có dấu cách).
   Kiểm bằng `docker compose version`. Nếu máy bạn chỉ có `docker-compose` (có gạch nối, bản v1)
   thì mọi lệnh dưới đây thay `docker compose` thành `docker-compose`.
-- **Khoảng 3 GB đĩa trống.** Ảnh cuối khoảng 1,3 GB, nhưng lúc build cần thêm chỗ cho layer
+- **Khoảng 2,5 GB đĩa trống.** Ảnh cuối khoảng 1 GB, nhưng lúc build cần thêm chỗ cho layer
   trung gian.
-- **Ít nhất 1 GB RAM cấp cho container.** Model ONNX một mình đã chiếm ~710 MB.
-  Docker Desktop trên Windows/macOS mặc định cấp 2 GB cho cả máy ảo — đủ, nhưng nếu bạn đã
-  hạ xuống thì phải nâng lại.
+- **Ít nhất 768 MB RAM cấp cho container** (đo được: 504 MB khi chạy, đỉnh 540 MB lúc nạp
+  model). Docker Desktop trên Windows/macOS mặc định cấp 2 GB cho cả máy ảo — đủ.
 - **Mạng lúc build** để tải model 470 MB từ Hugging Face. Lúc *chạy* thì không cần mạng, trừ
   khi bạn dùng nhánh LLM hoặc nối vào backend Java thật.
 
@@ -299,7 +298,9 @@ Nói thẳng để bạn biết chỗ nào cần để mắt ở lần chạy đ
 - Quyền ghi vào volume `/data` khi chạy bằng user `fsoft` (uid 10001). Theo tài liệu Docker,
   volume **có tên** kế thừa quyền của thư mục trong image nên phải chạy đúng; nhưng nếu bạn
   đổi sang **bind mount** thì quyền của host thắng và có thể gặp `Permission denied`.
-- RSS thật trong container Linux. Con số 784 MB là đo trên Windows.
+- RSS thật trong container Linux. Con số 504 MB ở mục 13 đo trên Windows; container Linux
+  với bản fp32 trước đó cho 881,5 MB so với 893,5 MB trên Windows, tức Linux thấp hơn khoảng
+  12 MB — nên dự kiến khoảng 492 MB, nhưng chưa xác nhận.
 - `docker compose` có nhận `mem_limit`/`cpus` ở cấp service hay cảnh báo bỏ qua — tuỳ phiên
   bản Compose.
 
@@ -346,6 +347,61 @@ Railway tự nhận `Dockerfile`. Cần làm thêm:
 4. Giữ đúng **1 replica**. Semantic cache và ngân sách token đều nằm trong RAM, và nhiều
    replica sẽ chạy nhiều vòng lặp đồng bộ chồng lên nhau.
 
-> **Cảnh báo về gói:** RSS đo được ~784 MB, vượt gói Railway 512 MB. Hướng xử lý là dùng bản
-> model lượng tử `model_qint8_avx512_vnni.onnx` (118 MB thay vì 470 MB) — chưa làm, xem
-> SPEC mục 14.6.
+---
+
+## 13. RAM và chọn gói hosting
+
+### Con số đo được
+
+Đo trên Xeon E5-2680, cùng một service, chỉ đổi biến thể ONNX:
+
+| Biến thể | File | RSS chạy | Đỉnh | Recall@5 | NEGATIVE | p50 |
+|---|---|---|---|---|---|---|
+| `model.onnx` fp32 | 448 MB | 893 MB | — | 0.971 | 1.00 | 11,7ms |
+| `model_O4.onnx` | 224 MB | 707 MB | — | 0.971 | 1.00 | 12,4ms |
+| **`..._qint8...onnx`** ← mặc định | **113 MB** | **504 MB** | **540 MB** | **0.971** | **1.00** | **10,3ms** |
+
+Bản lượng tử **giảm 44% RAM, giữ nguyên mọi chỉ số, và còn nhanh hơn** — nạp 1,4 giây thay
+vì 4,0 giây. Sau 40 lượt search và 3 lượt quiz, RSS không nhích lên: 503,3 → 503,9 MB.
+
+Đỉnh 540 MB xảy ra **lúc nạp model**, không phải lúc phục vụ. Đây là con số quyết định khi
+đặt trần bộ nhớ.
+
+> **Cái bẫy:** đổi `AI_EMBEDDING_MODEL_FILE` mà quên đổi `AI_MIN_SCORE` thì cổng lọc liên
+> quan sai âm thầm. Đo thật: bản lượng tử dùng ngưỡng 0.83 của fp32 làm **2 trong 5 case
+> NEGATIVE hỏng** — câu lẽ ra trả rỗng bắt đầu trả về thẻ bừa, không có lỗi nào báo.
+> `Settings` sẽ cảnh báo, và `tests/test_embedding.py` ghim cặp này lại.
+
+Muốn đo lại trên máy bạn: `uv run python scripts/do_bien_the_onnx.py` (chạy cả ba biến thể,
+mỗi cái một tiến trình riêng). Hiệu chỉnh lại ngưỡng: `uv run python scripts/hieu_chinh_nguong.py`.
+
+### Gói nào dùng được
+
+**Gói 512 MB không dùng được**, kể cả sau khi đã tối ưu: đỉnh 540 MB làm nó OOM ngay lúc
+khởi động, tức là chết trước khi kịp phục vụ request đầu tiên. Loại Render free,
+Koyeb free, Fly `shared-cpu-1x` 256 MB.
+
+Cần **tối thiểu 768 MB**. Vài lựa chọn thực tế:
+
+| Nơi chạy | RAM | Ghi chú |
+|---|---|---|
+| Oracle Cloud Always Free | 24 GB (ARM) | Miễn phí thật và rộng nhất. Cần build ảnh cho `arm64` |
+| Hugging Face Spaces (Docker, CPU basic) | 16 GB | Miễn phí, dựng nhanh nhất để demo. Không có volume bền |
+| Google Cloud Run | đặt tuỳ ý, 1 GB | Có bậc miễn phí, tự co về 0 khi rảnh. Nạp model 1,4 giây nên cold start chấp nhận được |
+| Railway Hobby | 1 GB | Rẻ, sẵn volume, đúng thứ SPEC mục 13 mô tả |
+| Fly.io `shared-cpu-1x` 1 GB | 1 GB | Có volume |
+
+Với Cloud Run và các nền tảng tự co giãn, nhớ **giới hạn 1 instance**: semantic cache và
+ngân sách token đều nằm trong RAM, và nhiều instance sẽ chạy nhiều vòng lặp đồng bộ chồng lên
+nhau (SPEC mục 14.3).
+
+### Còn giảm được nữa không
+
+Khó. Sau khi bỏ model, phần sàn khoảng **354 MB** là `onnxruntime` + `numpy` + tokenizer —
+đo được bằng cách trừ: fp32 tốn 799 MB cho file 448 MB, lượng tử tốn 466 MB cho file 113 MB,
+chênh lệch đúng bằng chênh lệch kích thước file. Muốn xuống dưới 400 MB thì phải đổi hẳn
+cách làm, ví dụ gọi API embedding bên ngoài — nhưng như vậy mất luôn tính chất "0 token,
+không phụ thuộc mạng" vốn là nền tảng của thiết kế này.
+
+Một mẹo đã áp dụng: tắt bộ cấp phát arena của ONNX Runtime (`AI_ONNX_CPU_ARENA=false`) tiết
+kiệm ~47 MB mà độ trễ không đổi.

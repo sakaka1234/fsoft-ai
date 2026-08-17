@@ -218,7 +218,7 @@ def test_backend_chet_thi_ghi_last_sync_error(client_backend_chet: TestClient) -
 # ---------------------------------------------------------------------
 
 
-def test_status_tra_du_field_theo_spec_8_5(client: TestClient) -> None:
+def test_status_tra_du_field_theo_spec_8_5(client: TestClient, settings: Settings) -> None:
     body = client.get("/internal/v1/index/status", headers=HEADERS).json()
 
     assert set(body) == {
@@ -235,7 +235,10 @@ def test_status_tra_du_field_theo_spec_8_5(client: TestClient) -> None:
         "backend_reachable",
         "source_mode",
     }
-    assert body["model_version"] == "multilingual-e5-small@t1"
+    # Phản chiếu cấu hình đang chạy, không ghim chuỗi cố định: `AI_MODEL_VERSION`
+    # phải đổi mỗi lần đổi biến thể ONNX, nên ghim ở đây chỉ tạo thêm một chỗ
+    # phải sửa mà không kiểm được gì thêm.
+    assert body["model_version"] == settings.ai_model_version
     assert body["source_mode"] == "fixture"
 
 

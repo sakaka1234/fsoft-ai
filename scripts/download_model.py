@@ -67,7 +67,10 @@ DIM = int(os.environ.get("AI_EMBEDDING_DIM", "384"))
 # khi README bảo là tải vào .cache/fastembed.
 CACHE_PATH = os.environ.get("FASTEMBED_CACHE_PATH", "./.cache/fastembed")
 
-MODEL_FILE = "onnx/model.onnx"
+# Phải khớp `ai_embedding_model_file` trong app/config.py. Tải nhầm biến thể thì
+# lúc chạy `find_local_snapshot` không thấy file cần và service đi tải lại giữa
+# lúc khởi động. `tests/test_embedding.py` ghim hai bên phải bằng nhau.
+MODEL_FILE = os.environ.get("AI_EMBEDDING_MODEL_FILE", "onnx/model_qint8_avx512_vnni.onnx")
 
 ADDITIONAL_FILES = [
     "onnx/tokenizer.json",

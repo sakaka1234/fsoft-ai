@@ -101,9 +101,32 @@ def test_download_model_khai_bao_giong_het_encoder() -> None:
     spec.loader.exec_module(script)
 
     assert script.ADDITIONAL_FILES == encoder_module._ADDITIONAL_FILES
-    assert script.MODEL_FILE == encoder_module._MODEL_FILE
+    assert script.MODEL_FILE == Settings().ai_embedding_model_file
     assert script.MODEL == Settings().ai_embedding_model
     assert script.DIM == Settings().ai_embedding_dim
+
+
+def test_nguong_loc_khop_voi_bien_the_onnx_dang_dung() -> None:
+    """
+    Ghim cặp (biến thể ONNX, AI_MIN_SCORE) lại với nhau.
+
+    Lượng tử hoá làm DỊCH phân bố cosine. Đo thật trên bộ 40 case: bản int8 dùng
+    ngưỡng 0.83 của fp32 thì 2 trong 5 case NEGATIVE hỏng — service vẫn trả 200,
+    vẫn không có log lỗi nào, chỉ là câu lẽ ra trả rỗng bắt đầu trả về thẻ bừa.
+
+    Không có test này thì đổi biến thể để tiết kiệm RAM là một cái bẫy.
+    """
+
+    from app.embedding.encoder import MIN_SCORE_THEO_MODEL
+
+    settings = Settings()
+
+    assert settings.ai_embedding_model_file in MIN_SCORE_THEO_MODEL, (
+        f"Biến thể {settings.ai_embedding_model_file} chưa được hiệu chỉnh ngưỡng. "
+        "Chạy scripts/hieu_chinh_nguong.py rồi thêm vào MIN_SCORE_THEO_MODEL."
+    )
+
+    assert settings.ai_min_score == MIN_SCORE_THEO_MODEL[settings.ai_embedding_model_file]
 
 
 # ---------------------------------------------------------------------

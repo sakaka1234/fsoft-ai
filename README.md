@@ -331,6 +331,14 @@ nhiều replica sẽ chạy nhiều vòng lặp đồng bộ chồng lên nhau.
 Gắn volume cho `AI_DB_PATH=/data/fsoft-ai.db`. Mất file này không phải thảm hoạ — service
 tự đồng bộ lại từ backend — nhưng phải embed lại toàn bộ.
 
-> **Chưa giải quyết:** RSS đo được **784 MB** trên Windows, vượt gói Railway 512 MB. Phần
-> lớn là model ONNX (~710 MB), không phải vector (73 MB). Hướng xử lý: dùng bản lượng tử
-> `model_qint8_avx512_vnni.onnx` (118 MB). Xem [SPEC mục 14.6](docs/SPEC.md).
+**RAM: 504 MB khi chạy, đỉnh 540 MB lúc nạp model.** Trước đây là 893 MB — đã giảm 44% bằng
+bản model ONNX lượng tử 8 bit, giữ nguyên Recall@5 và MRR, lại nhanh hơn.
+
+Vì đỉnh là 540 MB nên **gói 512 MB không dùng được** (OOM ngay lúc khởi động). Cần tối thiểu
+768 MB. Bảng so sánh ba biến thể và danh sách gói hosting dùng được ở
+[docs/DOCKER.md mục 13](docs/DOCKER.md).
+
+> **Đổi `AI_EMBEDDING_MODEL_FILE` là phải đổi kèm `AI_MIN_SCORE` và `AI_MODEL_VERSION`.**
+> Lượng tử hoá làm dịch phân bố cosine; sai cặp thì cổng lọc liên quan sai âm thầm — đo thật,
+> bản lượng tử dùng ngưỡng của fp32 làm 2 trong 5 case NEGATIVE hỏng. Bảng ngưỡng ở
+> `app/embedding/encoder.py`, và có test ghim lại.

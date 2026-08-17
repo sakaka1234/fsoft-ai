@@ -14,6 +14,7 @@ import pytest
 from dotenv import dotenv_values
 
 from app.config import PROJECT_ROOT, Settings
+from app.embedding.encoder import MIN_SCORE_THEO_MODEL
 
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 SPEC = PROJECT_ROOT / "docs" / "SPEC.md"
@@ -84,7 +85,13 @@ def test_env_example_nap_duoc_thanh_settings(tmp_path: Path) -> None:
     assert settings.ai_llm_api_key == ""
 
     assert settings.ai_embedding_dim == 384
-    assert settings.ai_min_score == pytest.approx(0.83)
+
+    # Không ghim con số ở đây: ngưỡng đi kèm biến thể ONNX, và bảng trong
+    # encoder.py là nguồn sự thật duy nhất. Ghim số sẽ biến mỗi lần đổi biến thể
+    # thành ba chỗ phải sửa, mà quên một chỗ thì hỏng âm thầm.
+    assert settings.ai_min_score == pytest.approx(
+        MIN_SCORE_THEO_MODEL[settings.ai_embedding_model_file]
+    )
     # Tiền tố E5 phải giữ nguyên dấu cách cuối, mất nó là retrieval kém âm thầm.
     assert settings.ai_query_prefix == "query: "
     assert settings.ai_passage_prefix == "passage: "
