@@ -1,4 +1,8 @@
-# Kết quả kiểm thử hai endpoint nội bộ — gửi đội Backend
+# Kết quả kiểm thử phía Backend — gửi đội Backend
+
+> Tài liệu này có **hai đợt kiểm**: mục 1–7 là hai endpoint nội bộ (16/08/2026), mục 8 là
+> ba endpoint `/api/ai/*` mà BE mở ra cho client (22/08/2026). Mục 8 là phần **đang chặn
+> tính năng**, đọc trước nếu ít thời gian.
 
 Ngày kiểm thử: 16/08/2026.
 Môi trường: `https://fsoft-project-production.up.railway.app/fsoft` (bản Railway).
@@ -185,3 +189,139 @@ sau:    từ nào nói về gia đình  ->  grandparent, grandparent, sibling
 
 Chi tiết cách gọi ba endpoint chat / search / quiz nằm ở
 [BACKEND_INTEGRATION.md](BACKEND_INTEGRATION.md).
+
+---
+
+## 8. ⛔ Ba endpoint `/api/ai/*` đang hỏng — kiểm ngày 22/08/2026
+
+Đợt này kiểm **đúng đường người dùng thật đi**: đăng nhập bằng tài khoản `sakaka1@gmail.com`
+qua `POST /auth/login`, rồi gọi ba endpoint AI bằng JWT nhận được.
+
+**Kết luận: cả ba đều lỗi, và fsoft-ai không liên quan.** Mọi lời gọi tương đương đánh thẳng
+vào fsoft-ai đều trả `200` với dữ liệu đúng. Lỗi nằm ở lớp proxy phía BE.
+
+Tài khoản test sở hữu 3 deck: **22** "Từ vựng Công việc văn phòng" (PRIVATE, 6 thẻ),
+**34** "Từ vựng Du lịch" (PRIVATE, 5 thẻ), **31** "meongao" (PUBLIC, 0 thẻ).
+
+### 8.1 `GET /api/ai/search` — trả `200` nhưng **sai phạm vi**, deck của chính user vô hình
+
+Chín truy vấn khác nhau, và BE **chỉ trả về đúng một thẻ duy nhất**: `card_id 2`, `deck 4`.
+
+| Truy vấn | Qua BE | Thẳng fsoft-ai với `allowed_deck_ids=[22,34,31]` |
+|---|---|---|
+| `hộ chiếu` | `[]` | `[(82, deck 34)]` |
+| `sân bay` | `[]` | `[(81, deck 34)]` |
+| `lịch trình` | `[]` | `[(84, deck 34)]` |
+| `meeting` | `[]` | `[(67, deck 22)]` |
+| `cuộc họp` | `[(2, deck 4)]` | `[(67, deck 22)]` |
+| `đồng nghiệp` | `[(2, deck 4)]` | `[(69, deck 22), (71, deck 22)]` |
+| `hành lý` | `[(2, deck 4)]` | `[(83, 34), (68, 22), (71, 22), (84, 34)]` |
+
+Deck 22 và 34 là deck **của chính người đang đăng nhập**, có thẻ, đã được index — nhưng không
+lần nào xuất hiện. Còn deck 4 (`Smoke Deck da doi ten`) thì lần nào cũng có.
+
+**Nghĩa là `allowed_deck_ids` mà BE gửi sang fsoft-ai không phải danh sách deck của user.**
+fsoft-ai tin tuyệt đối vào danh sách đó (theo đúng thiết kế), nên nó lọc đúng những gì được
+đưa — chỉ là được đưa sai.
+
+Việc cần làm: log ra chính xác `allowed_deck_ids` mà BE gửi trong một request thật. Nó phải
+là hợp của *deck user sở hữu* + *deck được chia sẻ* + *deck public*, chứ không phải một danh
+sách cố định.
+
+> Đây đồng thời là **rủi ro bảo mật hai chiều**: gửi thiếu thì user không thấy thẻ của mình
+> (đang xảy ra), gửi thừa thì user đọc được thẻ riêng tư của người khác. fsoft-ai không có
+> cách nào tự phát hiện, xem [BACKEND_INTEGRATION.md mục 2](BACKEND_INTEGRATION.md#2-ranh-giới-trách-nhiệm).
+
+### 8.2 `POST /api/ai/quiz` — hỏng **100%**, mọi deck
+
+Thử 7 deck, qua BE hỏng hết; cùng tham số đánh thẳng fsoft-ai thì chạy:
+
+| `deck_id` | Qua BE | Thẳng fsoft-ai |
+|---|---|---|
+| 7, 9, 10, 11, 22, 34 | `500 "Lỗi sinh bài tập AI"` | `200`, 4 câu |
+| 4 | `500 "Lỗi sinh bài tập AI"` | `400` — "Bộ thẻ chỉ có 2 thẻ trong phạm vi" (đúng, deck này thiếu thẻ) |
+
+Nghi nguyên nhân **cùng gốc với 8.1**: nếu BE tự đè `allowed_deck_ids` bằng danh sách sai thì
+`deck_id` nằm ngoài danh sách đó, fsoft-ai trả `400 INVALID_SCOPE`, và BE dịch thành `500`.
+
+Kèm hai lỗi phụ:
+
+**a. `"card_ids": []` bị chặn ở tầng validate của BE.**
+
+```
+{"deck_id":22,"allowed_deck_ids":[22],"card_ids":[]}        -> 400 "Validation error"
+{"deck_id":22,"allowed_deck_ids":[22],"card_ids":[1,2,3,4]} -> qua duoc tang validate
+{"deck_id":22,"allowed_deck_ids":[22]}                      -> qua duoc tang validate
+```
+
+Mảng rỗng là giá trị **hợp lệ**, nghĩa là "lấy cả deck" — và nó nằm ngay trong ví dụ mặc định
+của Swagger fsoft-ai, nên ai copy ví dụ đó sang cũng dính. Bỏ ràng buộc `@NotEmpty` trên
+`cardIds`.
+
+**b. `400 "Validation error"` không nói field nào sai.** Mình phải bisect từng trường mới tìm
+ra. Trả kèm tên field và lý do.
+
+### 8.3 `POST /api/ai/chat` — hỏng **100%**, và mã lỗi tự mâu thuẫn
+
+```
+HTTP 500   body: {"status": 429, "message": "Lỗi hỏi đáp AI"}
+```
+
+Ba lần liên tiếp đều vậy. Cùng lúc đó, gọi thẳng fsoft-ai với **đúng** tham số đó trả `200`:
+
+```json
+{"answer": "**passport** ... [#82]", "answer_source": "DIRECT_LOOKUP",
+ "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
+```
+
+Chú ý lượt này là `DIRECT_LOOKUP` — **0 token, không hề gọi LLM**, nên không thể là hết hạn
+mức phía fsoft-ai.
+
+Ba vấn đề trong một response:
+
+1. **HTTP status không khớp body.** Ngoài là `500`, trong là `429`. Client bắt theo HTTP sẽ
+   xử lý sai hoàn toàn.
+2. **`429` bị nuốt.** fsoft-ai trả `BUDGET_EXHAUSTED` kèm `retry_after_seconds` để client biết
+   chờ bao lâu. BE cần **truyền tiếp `429` và cả `retry_after_seconds`**, đừng đổi thành `500`.
+3. **Không rõ `429` từ đâu.** Nếu là bộ giới hạn riêng của BE thì cần nói rõ trong message;
+   nếu là chuyển tiếp từ fsoft-ai thì sai, vì cùng lúc đó fsoft-ai trả `200`.
+
+### 8.4 Điểm thiết kế nên xem lại: client tự khai `allowed_deck_ids`
+
+`GET /api/ai/search` chỉ nhận `query` và BE tự tính phạm vi — **đúng**.
+
+Nhưng `POST /api/ai/chat` và `POST /api/ai/quiz` lại nhận `allowed_deck_ids` **từ client**.
+Nghĩa là bất kỳ ai có JWT hợp lệ đều có thể tự điền ID deck riêng tư của người khác vào và
+đọc được nội dung. fsoft-ai không kiểm quyền — nó không biết user là ai.
+
+Nên bỏ `allowed_deck_ids` khỏi request của cả hai endpoint, cho BE tự tính giống `/search`.
+Muốn giữ để client thu hẹp phạm vi thì phải **giao với** danh sách BE tính được, đừng dùng
+thẳng.
+
+### 8.5 Cách tái hiện
+
+```bash
+BE=https://fsoft-project-production.up.railway.app/fsoft
+JWT=$(curl -s -X POST "$BE/auth/login" -H 'Content-Type: application/json'   -d '{"email":"...","password":"..."}' | jq -r .data.token.accessToken)
+
+# 8.1 — tra ve [] du user so huu deck 34 chua the "passport"
+curl -s "$BE/api/ai/search?query=h%E1%BB%99%20chi%E1%BA%BFu" -H "Authorization: Bearer $JWT"
+
+# 8.2 — 500 voi moi deck
+curl -s -X POST "$BE/api/ai/quiz" -H "Authorization: Bearer $JWT"   -H 'Content-Type: application/json'   -d '{"deck_id":22,"allowed_deck_ids":[22],"question_count":4}'
+
+# 8.3 — HTTP 500 nhung body status 429
+curl -s -X POST "$BE/api/ai/chat" -H "Authorization: Bearer $JWT"   -H 'Content-Type: application/json'   -d '{"query":"passport nghia la gi","allowed_deck_ids":[22,34]}'
+```
+
+### 8.6 Việc cần làm, xếp theo mức chặn
+
+| # | Việc | Mức |
+|---|---|---|
+| 1 | Log và sửa `allowed_deck_ids` BE gửi sang fsoft-ai — hiện không phải deck của user | **Chặn 8.1 + 8.2** |
+| 2 | Đừng dịch lỗi fsoft-ai thành `500`; giữ nguyên mã và `retry_after_seconds` | **Chặn 8.3** |
+| 3 | Bỏ `@NotEmpty` trên `cardIds` để chấp nhận `[]` | Cao |
+| 4 | Bỏ `allowed_deck_ids` khỏi request của `/api/ai/chat` và `/api/ai/quiz` | **Bảo mật** |
+| 5 | `400 Validation error` phải nói rõ field nào sai | Trung bình |
+| 6 | Sửa `/fsoft/v3/api-docs` đang trả `500` (Swagger UI mở được nhưng không nạp được spec) | Thấp |
+
