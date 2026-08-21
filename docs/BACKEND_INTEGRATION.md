@@ -49,6 +49,51 @@ curl -H "X-Internal-Token: $TOKEN_A" \
 ```
 
 Còn thấy `"source_mode": "fixture"` nghĩa là mọi câu trả lời đang dựa trên 24 thẻ mẫu đó.
+(`backend_reachable: true` trong đoạn trên **không** có nghĩa là đã nối được với các bạn — ở chế
+độ `fixture` thì "nguồn" chỉ là một tệp cục bộ, xem [5.1](#51-vận-hành-và-đồng-bộ).)
+
+### Tích hợp có HAI chiều, và chiều dữ liệu mới là chiều quan trọng
+
+```
+   chiều 1   Backend Java  ──gọi──►  fsoft-ai        (chat, search, quiz)
+   chiều 2   fsoft-ai  ──kéo thẻ──►  Backend Java    (đồng bộ mỗi 120 giây)
+```
+
+Làm xong chiều 1 thì API gọi được ngay, nhưng fsoft-ai **vẫn trả lời bằng 24 thẻ mẫu** cho tới
+khi chiều 2 được bật. Đây là chỗ dễ tưởng đã xong nhất.
+
+**Triệu chứng hôm nay nếu backend gửi `deck_id` / `card_ids` thật.** Index hiện chỉ chứa đúng
+những ID của bộ mẫu:
+
+```
+deckId 1: 101-109      deckId 3: 301-304
+deckId 2: 201-208      deckId 4: 401-403
+```
+
+Gọi bằng ID thật, đo trên service đang chạy:
+
+| Gọi gì | Nhận về |
+|---|---|
+| `quiz/generate` với `deck_id: 77` | `400 INVALID_REQUEST` — "Bộ thẻ chỉ có **0 thẻ** trong phạm vi, cần ít nhất 4 thẻ..." |
+| `search` với `allowed_deck_ids: [77]` | `200` với `{"results": [], "candidate_count": 0}` |
+
+Cái thứ hai nguy hiểm hơn: nó **không báo lỗi**, chỉ trả rỗng, nên trông y hệt "không có thẻ
+nào liên quan" chứ không phải "chưa có dữ liệu". Thấy `results` luôn rỗng với mọi truy vấn thì
+việc đầu tiên phải kiểm là `source_mode`, đừng đi chỉnh câu truy vấn.
+
+**Bật chiều 2:** đặt ba biến này ở phía fsoft-ai rồi ép đồng bộ một lần.
+
+```
+AI_SOURCE_MODE=http
+AI_BACKEND_URL=https://<backend>/fsoft
+AI_BACKEND_TOKEN=<TOKEN_B>
+```
+
+```bash
+curl -X POST -H "X-Internal-Token: $TOKEN_A"   "https://fsoft-ai.onrender.com/internal/v1/index/sync?full=true&sweep=true"
+```
+
+Đạt khi `source_mode` thành `"http"`, `card_count` khớp số thẻ thật, và `last_sync_error: null`.
 
 ---
 
@@ -352,7 +397,7 @@ Bốn field đáng theo dõi khi ghép hệ thống:
 | Field | Ý nghĩa |
 |---|---|
 | `source_mode` | `fixture` = đang dùng 24 thẻ mẫu. Phải thành `http` khi nối thật |
-| `backend_reachable` | `false` nghĩa là fsoft-ai không gọi được endpoint của bạn |
+| `backend_reachable` | **Chỉ có nghĩa khi `source_mode` là `http`.** Lúc đó `false` = fsoft-ai không gọi được endpoint của bạn. Ở chế độ `fixture` nó vẫn báo `true` vì "nguồn" chỉ là một tệp cục bộ — đừng đọc nó như bằng chứng đã nối thật |
 | `last_sync_error` | Nội dung lỗi của chu kỳ gần nhất, `null` là đang lành |
 | `card_count` | Phải khớp số thẻ thật trong MySQL sau khi đồng bộ xong |
 
