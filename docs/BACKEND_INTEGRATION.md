@@ -3,7 +3,7 @@
 > **Đối tượng:** đội backend Java (Spring Boot).
 > **Bạn không cần đọc `SPEC.md`.** Tài liệu này tự chứa mọi thứ để tích hợp.
 >
-> **Trạng thái ngày 23/08/2026: M1 đến M8 đã xong và service đang chạy thật.** Mọi ví dụ
+> **Trạng thái ngày 23/08/2026: M1 đến M9 đã xong và service đang chạy thật.** Mọi ví dụ
 > request/response trong tài liệu này là **gọi thật vào service đang chạy**, không có ví dụ
 > nào viết tay. Chỗ nào là số đo thì có ghi rõ.
 >
@@ -778,6 +778,156 @@ nghĩa — xảy ra trong cửa sổ sau khi container khởi động lại mà 
 
 ---
 
+### 5.7 `POST /internal/v1/vocab/generate`
+
+Người dùng gõ một **chủ đề**, nhận về **thẻ từ vựng mới** đã dựng sẵn đủ trường — đúng
+shape thẻ nên backend chỉ việc lưu những thẻ người dùng tick chọn.
+
+Anh em với mục 5.6 nhưng ngược chiều: `extract` đòi sẵn một đoạn văn, ở đây đầu vào chỉ là
+một chủ đề. **fsoft-ai không lưu gì cả.**
+
+```json
+{
+  "topic": "tôi muốn học từ về công việc",
+  "allowed_deck_ids": [1, 2, 3, 4],
+  "level": "B2",
+  "count": 5
+}
+```
+
+Response thật (rút gọn còn hai thẻ, lần chạy trả về năm):
+
+```json
+{
+  "topic_understood": "Công việc và nơi làm việc",
+  "cards": [
+    {
+      "word": "escalate",
+      "phonetic": "/ˈeskəleɪt/",
+      "part_of_speech": "verb",
+      "meaning": "chuyển vấn đề lên cấp cao hơn",
+      "definition_en": "to refer an issue to a higher level of authority",
+      "example_sentence": "We had to escalate the issue to the regional director.",
+      "example_meaning": "Chúng tôi phải chuyển vấn đề lên giám đốc vùng.",
+      "already_in_deck": false,
+      "existing_card_id": null
+    }
+  ],
+  "stats": {
+    "topic_chars": 27, "level": "B2", "requested": 5,
+    "avoid_list_size": 18, "avoid_list_dropped": 0, "returned_by_llm": 5,
+    "dropped_unsafe": 0, "dropped_incoherent": 0, "dropped_duplicate_in_batch": 0,
+    "already_in_deck_count": 0, "dedup_checked": true, "llm_calls": 1,
+    "prompt_tokens": 1042, "completion_tokens": 1876, "latency_ms": 6210
+  }
+}
+```
+
+---
+
+#### ⚠️ ĐỌC MỤC NÀY TRƯỚC KHI DỰNG GIAO DIỆN
+
+Ở mục 5.6, câu ví dụ **bắt buộc có thật trong văn bản người dùng dán vào**. Đó không phải
+một bộ lọc, đó là phép kiểm **xuất xứ**: không một chữ tiếng Anh mới nào lọt vào dữ liệu
+lưu trữ. Người dùng đã đọc đoạn văn đó rồi mới dán.
+
+Ở đây không có văn bản gốc. **100% mỗi byte được lưu đều do một model bịa ra.**
+
+| | `/vocab/extract` | `/vocab/generate` |
+|---|---|---|
+| Nội dung tiếng Anh mới | model **không thể** đưa vào | model **có thể** |
+| Service kiểm được | xuất xứ + hình dạng | **chỉ hình dạng** |
+| Cờ phân biệt máy đọc được | có `stats.dropped_not_grounded` | **không có trường đó** |
+
+Service **không kiểm được và không thể kiểm được**: nghĩa tiếng Việt có đúng không, phiên
+âm có phải IPA thật của từ đó không, từ đó có tồn tại trong tiếng Anh không, có đúng
+`level` đã xin không, từ có thật sự thuộc chủ đề không.
+
+**Vì vậy bước người dùng tick chọn là lần soát nội dung DUY NHẤT mấy thẻ này sẽ có**, trước
+khi chúng thành thẻ nằm trong deck chia sẻ được rồi đồng bộ ngược vào chính corpus RAG trả
+lời `/chat` của người khác. Đó không phải một chi tiết giao diện. Bốn điều dưới đây là
+**yêu cầu**, không phải gợi ý:
+
+**1. Giao diện phải hiện MỌI trường sắp lưu.** Không ai đồng ý được với văn bản họ không
+được xem. Hiện `word` + `meaning` rồi lặng lẽ lưu thêm `example_sentence`, `definition_en`,
+`example_meaning` và `phonetic` là đã xoá bỏ ranh giới này — tính năng khi đó không còn
+một lần soát nội dung nào.
+
+**2. Không có đường hàng loạt.** Không nút "chọn tất cả", không tự lưu, không job nền,
+không "sinh 50 thẻ cho deck của tôi". Mục 5.6 sống sót được với một nút chọn tất cả; mục
+này thì không.
+
+**3. Backend PHẢI kiểm lại khi ghi.** Luồng là: sinh → **trả về client** → client gửi ngược
+lên phần đã tick → backend lưu. Chặng giữa đi qua client, nên client gửi lên được những
+thẻ service này chưa từng sinh ra, và **mọi chốt chặn dưới đây bị vòng qua sạch**. Hãy dựng
+lại các luật sau ở phía Java, trên đường ghi:
+
+| Trường | Luật |
+|---|---|
+| `word` | ≤ 32 ký tự, khớp `^[a-z]+(?:['-][a-z]+)*(?: [a-z]+(?:['-][a-z]+)*){0,2}$` |
+| `meaning` | ≤ 100 ký tự, **phải** có dấu tiếng Việt |
+| `definition_en` | ≤ 120 ký tự, **không** được có dấu tiếng Việt |
+| `example_sentence` | ≤ 140 ký tự, **không** được có dấu tiếng Việt |
+| `example_meaning` | ≤ 140 ký tự |
+| `phonetic` | ≤ 40 ký tự, bọc hai dấu `/` |
+| mọi trường văn xuôi | chỉ chữ cái, chữ số, khoảng trắng và `. , ' " ? ! ; : ( ) -` |
+
+Chú ý luật cuối là **allowlist**, không phải danh sách cấm. `=`, `&`, `@`, `<`, `>` bị loại
+vì **không được kể tên**. Chuỗi `" autofocus onfocus=alert(1) x="` không chứa một dấu ngoặc
+nhọn nào và vẫn thoát ra khỏi mọi thuộc tính HTML — danh sách cấm không bắt được nó.
+
+**4. Đánh dấu xuất xứ khi lưu.** Gắn một cờ kiểu `generated_by: AI_TOPIC` lên thẻ (có tiền
+lệ: `generated_by: DETERMINISTIC` của quiz). Không có cờ này thì sáu tháng nữa, một thẻ sai
+xuất hiện trong deck chia sẻ và không ai phân biệt được nó do người học gõ hay model bịa —
+không rà soát hàng loạt được, không thu hồi được.
+
+> **Kiểm duyệt nội dung là việc của backend.** Mục 5.6 chỉ có thể làm nổi lên những từ vốn
+> đã nằm trong clipboard của chính người dùng. Mục này sẽ vui vẻ sinh trọn một bộ từ vựng
+> cho **bất kỳ** chủ đề nào người dùng gõ. Không có chốt tất định nào cho việc đó, và một
+> danh sách từ cấm song ngữ thì vòng qua quá dễ.
+
+---
+
+#### Năm cái bẫy khác
+
+**1. `topic` vượt 120 ký tự trả `400` với `{"error": {...}}`**, còn `count` ngoài 1–5 hay
+`level` ngoài `A1`–`C2` trả `422` với `{"detail": [...]}`. Hai hình dạng khác nhau là cố ý:
+400 cho luật nghiệp vụ, 422 cho sai kiểu. Parser phải chịu được cả hai.
+
+**Chủ đề tiếng Việt hoàn toàn hợp lệ** — đó là ca dùng chính. Ngược với mục 5.6, nơi một
+đoạn thuần tiếng Việt bị từ chối vì không có từ tiếng Anh nào để trích.
+
+**2. Mảng rỗng KHÔNG phải câu trả lời hợp lệ ở đây** — ngược mục 5.6:
+
+| | `/vocab/extract` | `/vocab/generate` |
+|---|---|---|
+| `returned_by_llm = 0` | **200**, đừng gọi lại | **503**, thử lại được |
+
+"Chủ đề của bạn không có từ vựng nào" gần như không bao giờ đúng. Số 0 nghĩa là model từ
+chối, chạm bộ lọc an toàn, hoặc trả rác. Gợi ý người dùng gõ chủ đề cụ thể hơn.
+
+**3. `count` là lời hứa, `level` thì không.** Service cắt kết quả về đúng `count` (model
+thực tế hay trả dư). Nhưng `level` chỉ là gợi ý đưa vào prompt — **không có bộ kiểm CEFR
+nào**, nên đừng dựng giao diện hứa "từ vựng trình độ A1" như một sự thật đã kiểm chứng.
+
+**4. Nút "thêm từ nữa" dùng `exclude_words`.** Gửi lại chính những từ giao diện vừa hiện ở
+lượt trước; lượt này sẽ ra từ khác. Client giữ trạng thái, service không lưu gì — đúng cách
+`/chat` làm với `history`. Không có `exclude_words` thì gọi lại cùng chủ đề sẽ ra phần lớn
+là từ cũ, cho tới khi người dùng lưu thẻ và chu kỳ đồng bộ 120 giây tiếp theo chạy xong.
+
+**5. Ngân sách: rẻ hơn mục 5.6 nhưng vẫn đắt, và dùng CHUNG hàng đợi với nó.** Một lượt đặt
+chỗ ~69% ngân sách token mỗi phút của toàn hệ thống (mục 5.6 là ~87%). Hai endpoint
+`/vocab/*` chỉ chạy **một lượt tại một thời điểm**; chờ quá 10 giây thì trả `429` luôn chứ
+không để request treo. Gọi tuần tự, và đừng gọi khi người dùng vừa gõ xong — chờ họ bấm nút.
+
+> **Nội dung trả về do model sinh ra hoàn toàn.** Service đã chặn ký tự nguy hiểm, đường
+> dẫn và ký tự vô hình ở mọi trường, nhưng **frontend vẫn phải escape khi render** — dùng
+> Markdown renderer có `html: false` hoặc DOMPurify, tuyệt đối không
+> `dangerouslySetInnerHTML` / `v-html` / `th:utext`. Ở mục 5.6 lời nhắc này là phòng thủ
+> thêm một lớp; ở đây nó là lớp cuối cùng.
+
+---
+
 ## 6. Định dạng lỗi
 
 fsoft-ai **không** dùng bọc `ApiResponse` như backend Java. Mọi lỗi có dạng:
@@ -938,6 +1088,16 @@ Chạy bằng Docker: xem [`DOCKER.md`](DOCKER.md).
 - [ ] Timeout cho lần gọi đầu ≥ 60 giây (Render free ngủ sau 15 phút)
 - [ ] Tắt fsoft-ai → backend trả `503` message tiếng Việt, **không phải** `500`
 - [ ] Lỗi 503 từ `/chat` **không** làm tắt `/search` và quiz ở giao diện
+
+**Phía Java — riêng cho `/vocab/generate` ([mục 5.7](#57-post-internalv1vocabgenerate))**
+
+- [ ] Giao diện xác nhận hiện **mọi trường** sắp lưu, không giấu trường nào
+- [ ] **Không** có nút "chọn tất cả", không tự lưu, không job nền sinh thẻ
+- [ ] Đường ghi **kiểm lại** độ dài và bộ ký tự từng trường — client gửi ngược lên
+      được thứ service này chưa từng sinh ra
+- [ ] Thẻ lưu từ endpoint này mang cờ xuất xứ (`generated_by: AI_TOPIC` hoặc tương đương)
+- [ ] Mọi trường được **escape khi render**, không `dangerouslySetInnerHTML` / `v-html` / `th:utext`
+- [ ] Có đường để người dùng báo cáo thẻ không phù hợp
 
 **Phía hạ tầng**
 

@@ -98,6 +98,7 @@ class VocabExtractor:
         index: SearchIndex,
         llm: LlmClient,
         prompts: PromptRegistry,
+        sem: asyncio.Semaphore | None = None,
     ) -> None:
         self._settings = settings
         self._index = index
@@ -116,7 +117,14 @@ class VocabExtractor:
         # lời gọi extract đang bay. Một lời gọi đặt chỗ hơn nửa ngân sách token
         # mỗi phút của TOÀN hệ thống, nên hai lời gọi song song là đủ để mọi
         # người khác nhận 429 khi chat.
-        self._sem = asyncio.Semaphore(1)
+        #
+        # Từ M9 nó được TIÊM VÀO và dùng chung với `VocabGenerator`. Lý do nằm
+        # ngay trong câu trên: mục đích của nó là toàn cục ("ngân sách token của
+        # TOÀN hệ thống"), không thuộc riêng endpoint nào. Hai instance riêng
+        # cho hai endpoint đắt tiền là chỗ sai phạm vi hiện hình.
+        #
+        # Mặc định `None` để test và mã dựng trực tiếp cũ không phải đổi.
+        self._sem = sem or asyncio.Semaphore(1)
 
     async def extract(
         self, request: VocabExtractRequest

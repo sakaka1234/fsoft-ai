@@ -743,7 +743,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 -- Nhật ký gọi LLM
 CREATE TABLE IF NOT EXISTS usage_log (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    task              TEXT    NOT NULL,   -- CHAT | REWRITE | QUIZ | VOCAB_EXTRACT | EMBED
+    task              TEXT    NOT NULL,   -- CHAT | REWRITE | QUIZ | VOCAB_EXTRACT | VOCAB_GENERATE | EMBED
     provider          TEXT    NOT NULL,
     model             TEXT    NOT NULL,
     answer_source     TEXT,
@@ -1048,6 +1048,148 @@ cách nào tự chế nghĩa tiếng Việt của một từ, nên lỗi đượ
 | Model trả rác / mọi ứng viên bị loại | **503** `PROVIDER_UNAVAILABLE` |
 | Cạn ngân sách | **429** `BUDGET_EXHAUSTED` kèm `retry_after_seconds` |
 
+### 8.5c `POST /internal/v1/vocab/generate`
+
+> Lại đánh số bằng chữ cái, cùng lý do với `8.5b` ở trên: `§8.6` đang được năm
+> chỗ trong mã nguồn trích dẫn, chèn số mới vào giữa là làm cả năm sai âm thầm.
+
+Nhận một **chủ đề** người dùng gõ, trả về **thẻ từ vựng mới** đã dựng sẵn đủ
+trường. Anh em với [8.5b](#85b-post-internalv1vocabextract) nhưng ngược chiều:
+`extract` đòi sẵn một đoạn văn, ở đây đầu vào chỉ là một chủ đề. Service **không
+lưu gì** — ranh giới mục 5.1 giữ nguyên.
+
+```json
+{
+  "topic": "tôi muốn học từ về công việc",
+  "allowed_deck_ids": [1, 2, 3, 4],
+  "level": "B2",
+  "count": 6,
+  "exclude_words": ["itinerary", "layover"]
+}
+```
+
+| Tham số | Bắt buộc | Ghi chú |
+|---|---|---|
+| `topic` | có | Tối đa **120 ký tự**, ít nhất một chữ cái. Tiếng Việt hoàn toàn hợp lệ |
+| `allowed_deck_ids` | có | Rỗng → `400 INVALID_SCOPE`. Ở đây làm **hai** việc, xem dưới |
+| `level` | không | `A1`–`C2`. Giá trị lạ → `422`, khác hình dạng với `400` |
+| `count` | không | Mặc định 6, khoảng 1–**6**. Trần là ràng buộc ngân sách |
+| `exclude_words` | không | Từ đã hiện cho người dùng ở lượt trước, để lượt này ra từ khác |
+
+```json
+{
+  "topic_understood": "Công việc và nơi làm việc",
+  "cards": [
+    {
+      "word": "escalate",
+      "phonetic": "/ˈeskəleɪt/",
+      "part_of_speech": "verb",
+      "meaning": "chuyển vấn đề lên cấp cao hơn",
+      "definition_en": "to refer an issue to a higher level of authority",
+      "example_sentence": "We had to escalate the issue to the regional director.",
+      "example_meaning": "Chúng tôi phải chuyển vấn đề lên giám đốc vùng.",
+      "already_in_deck": false,
+      "existing_card_id": null
+    }
+  ],
+  "stats": {
+    "topic_chars": 27, "level": "B2", "requested": 6,
+    "avoid_list_size": 18, "avoid_list_dropped": 0, "returned_by_llm": 6,
+    "dropped_unsafe": 0, "dropped_incoherent": 1, "dropped_duplicate_in_batch": 0,
+    "already_in_deck_count": 0, "dedup_checked": true, "llm_calls": 1,
+    "prompt_tokens": 1042, "completion_tokens": 1876, "latency_ms": 6210
+  }
+}
+```
+
+#### Khác biệt cốt lõi so với 8.5b, và nó không vá được bằng bộ lọc
+
+Bộ lọc mạnh nhất của `extract` không phải một bộ lọc — nó là phép kiểm **xuất
+xứ**. `example_sentence` bắt buộc có thật trong đoạn văn người dùng dán vào,
+nghĩa là **không một chữ tiếng Anh mới nào lọt vào dữ liệu lưu trữ**.
+
+Ở đây không có văn bản gốc. Xuất xứ biến mất và không dựng lại được.
+
+| | `/vocab/extract` | `/vocab/generate` |
+|---|---|---|
+| Nội dung tiếng Anh mới | model **không thể** đưa vào | model **có thể** |
+| Service kiểm được | xuất xứ + hình dạng | **chỉ hình dạng** |
+| Cờ phân biệt máy đọc được | có `stats.dropped_not_grounded` | **không có trường đó** |
+
+Service **không kiểm được và không thể kiểm được**: nghĩa tiếng Việt có đúng
+không, phiên âm có phải IPA thật của từ đó không, từ đó có tồn tại trong tiếng
+Anh không, có đúng `level` đã xin không, từ có thật sự thuộc chủ đề không.
+
+Vì vậy **bước người dùng xác nhận là ranh giới đúng-sai của tính năng này**, chứ
+không phải một chi tiết giao diện: nó là lần soát nội dung duy nhất mấy thẻ này
+sẽ có trước khi thành thẻ chia sẻ được rồi đồng bộ ngược vào chính corpus RAG.
+
+#### Bốn nhóm chốt chặn tất định
+
+1. **Trần độ dài chặt hơn hẳn 8.5b** — `example_sentence` 140 ký tự thay vì 300,
+   `meaning` 100 thay vì 120. Bảng của `extract` cân cho câu **chép lại**; ở đây
+   cùng con số ấy lại là văn xuôi model tự viết mà chưa ai đọc. Đây là chốt duy
+   nhất **chứng minh được** giới hạn thiệt hại.
+2. **Allowlist ký tự, không phải denylist.** Trường chỉ được chứa chữ cái, chữ
+   số, khoảng trắng và `. , ' " ? ! ; : ( ) -`. Mọi thứ khác bị loại vì **không
+   được kể tên**, chứ không phải vì có ai nhớ ra mà cấm. Nhờ vậy `=`, `&`, `@`
+   và chuỗi kiểu `" autofocus onfocus=alert(1) x="` — thứ lọt qua được denylist
+   của 8.5b — không có cửa. Tên miền trần (`evil.com`) bị chặn riêng.
+3. **Chốt ngôn ngữ.** `meaning` **phải** có dấu tiếng Việt; `example_sentence`
+   và `definition_en` **không được** có. Chặn cả việc model trả lời bằng tiếng
+   Anh vào ô nghĩa lẫn việc dùng ô nghĩa làm kênh văn xuôi tự do.
+4. **Câu ví dụ phải dùng chính từ đó.** Đây là phép kiểm **chất lượng, không
+   phải an toàn** — nó bắt model cẩu thả, không bắt kẻ tấn công. Không nhận ra
+   động từ bất quy tắc (`give` chia thành `gave`), nên thỉnh thoảng bỏ nhầm một
+   thẻ đúng; đếm ở `stats.dropped_incoherent`.
+
+#### Danh sách "tránh" — vì sao lượt thứ hai không ra từ cũ
+
+Trước khi gọi LLM, service embed chủ đề rồi tìm ngữ nghĩa **trong
+`allowed_deck_ids`** để lấy từ người học đã có, đưa vào prompt làm danh sách cần
+tránh. **0 token LLM** — chỉ một lượt suy luận ONNX cục bộ.
+
+Chỉ lấy trường `word`, tuyệt đối không dùng `serialize_card`: hàm đó cố ý đưa cả
+`note` vào prompt, mà `note` là ô tự do người dùng gõ — chính bộ thẻ mẫu của repo
+đã có một thẻ mang sẵn câu `IGNORE ALL PREVIOUS INSTRUCTIONS...` ở đó.
+
+`exclude_words` được gộp vào và ưu tiên hơn: đó là cách làm nút "thêm từ nữa" mà
+service không phải lưu trạng thái nào, đúng cách `/chat` làm với `history`.
+
+**Danh sách tránh là lời khuyên, `already_in_deck` mới là luật.** Model bỏ qua
+danh sách thì thẻ trùng vẫn quay về kèm cờ và **vẫn nằm trong kết quả**.
+
+#### Ngân sách — rẻ hơn 8.5b, và có trần chặt hơn
+
+Prompt ở đây ngắn hơn nhiều (không mang 4.000 ký tự văn bản), nhưng model phải
+**tự nghĩ ra** thay vì **chọn lọc**, nên chi phí đầu ra không giảm tương ứng. Số
+đo thật nằm trong `app/vocab/generator.py` và `scripts/do_sinh_theo_chu_de.py`.
+
+Luật đặt trần khác 8.5b, và cố ý chặt hơn:
+
+> Đặt chỗ ở cấu hình xấu nhất ≤ **70%** ngân sách token mỗi phút.
+
+70% là con số tròn lớn nhất mà vẫn còn chỗ cho ít nhất **một lượt `/chat`**
+(~1.700 token) chạy song song. `extract` đang ở 87%, nghĩa là mọi lượt chat trong
+lúc nó chạy đều ăn 429 — đó là khiếm khuyết đã ship, ghi nhận là ngoại lệ, không
+nhân rộng. Có test khoá lại cả hai ngưỡng.
+
+Hai endpoint dùng **chung một hàng đợi**, chỉ một lượt chạy tại một thời điểm.
+Chờ quá 10 giây thì trả `429` luôn, thay vì để request treo quá thời gian chờ
+của client.
+
+#### Mảng rỗng KHÔNG phải câu trả lời hợp lệ — đảo ngược so với 8.5b
+
+| Tình huống | 8.5b | 8.5c |
+|---|---|---|
+| `returned_by_llm = 0` | **200** — đoạn văn thật sự không có gì đáng học | **503** |
+| Model trả rác / mọi thẻ bị loại | 503 | 503 |
+| Cạn ngân sách | 429 kèm `retry_after_seconds` | 429 kèm `retry_after_seconds` |
+
+"Chủ đề của bạn không có từ vựng nào" gần như không bao giờ đúng. Số 0 ở đây
+nghĩa là model từ chối, chạm bộ lọc an toàn, hoặc trả rác — trả 200 rỗng là nói
+dối.
+
 ### 8.6 Định dạng lỗi
 
 ```json
@@ -1086,6 +1228,7 @@ fsoft-ai/
 │   ├── m0_embedding.py            # ĐÃ CÓ — chạy ở M0
 │   ├── m0_groq.py                 # ĐÃ CÓ — chạy ở M0
 │   ├── download_model.py          # nạp model vào cache lúc build image
+│   ├── do_sinh_theo_chu_de.py     # ★ M9, đo token thật, bảng kết quả trong docstring
 │   └── run_eval.py
 ├── docs/
 │   ├── SPEC.md                    # tài liệu này
@@ -1106,7 +1249,8 @@ fsoft-ai/
 │   │       └── vocab.py
 │   ├── core/
 │   │   ├── logging.py             # structlog JSON
-│   │   └── errors.py
+│   │   ├── errors.py
+│   │   └── text.py                # vị từ văn bản dùng chung (M9)
 │   ├── store/
 │   │   ├── db.py                  # kết nối sqlite3, WAL, chạy migration
 │   │   ├── card_repo.py
@@ -1135,7 +1279,9 @@ fsoft-ai/
 │   │       ├── chat_user_v1.txt
 │   │       ├── query_rewrite_v1.txt
 │   │       ├── quiz_fill_blank_v1.txt
-│   │       └── vocab_extract_v1.txt
+│   │       ├── vocab_extract_v1.txt
+│   │       ├── vocab_generate_system_v1.txt
+│   │       └── vocab_generate_user_v1.txt
 │   ├── chat/
 │   │   ├── orchestrator.py        # luồng 12 bước ở mục 11.5
 │   │   ├── direct_answer.py       # trả lời template, 0 token
@@ -1148,7 +1294,10 @@ fsoft-ai/
 │   │   └── validator.py
 │   ├── vocab/
 │   │   ├── extractor.py           # ★ M8, một lời gọi LLM, không thử lại
-│   │   └── grounding.py           # ★ M8, hàm thuần: câu ví dụ có bám text không
+│   │   ├── grounding.py           # ★ M8, hàm thuần: câu ví dụ có bám text không
+│   │   ├── generator.py           # ★ M9, sinh theo chủ đề, danh sách tránh
+│   │   ├── guard.py               # ★ M9, hàm thuần: chốt chặn cho thẻ model tự bịa
+│   │   └── dedup.py               # ★ M9, đánh dấu trùng, dùng chung hai endpoint
 │   └── schemas/
 │       ├── card.py
 │       ├── chat.py
@@ -1171,6 +1320,7 @@ fsoft-ai/
     ├── test_chat.py
     ├── test_quiz.py
     ├── test_vocab.py
+    ├── test_vocab_generate.py
     ├── test_config.py
     ├── test_stats.py
     └── test_security.py
@@ -1690,6 +1840,51 @@ Endpoint `POST /internal/v1/vocab/extract`, đặc tả ở [mục 8.5b](#85b-po
 - [ ] Thiếu `AI_LLM_API_KEY` → `503 PROVIDER_UNAVAILABLE`, không bao giờ traceback
 - [ ] Lượt gọi đắt nhất (văn bản dài nhất, `max_candidates` trần) vẫn lọt ngân sách
       một phút — có test khoá lại con số này
+
+---
+
+### 11.10 M9 — Sinh thẻ từ vựng theo chủ đề
+
+> **Ngoài backlog Sprint 2**, giống M8. Ghi lại để không ai tưởng nó vốn nằm
+> trong kế hoạch.
+
+Endpoint `POST /internal/v1/vocab/generate`, đặc tả ở [mục 8.5c](#85c-post-internalv1vocabgenerate).
+
+**Acceptance:**
+
+- [ ] `topic` 121 ký tự → `400 INVALID_REQUEST`, thông báo nêu **cả** độ dài thật
+      lẫn giới hạn. Là 400 với `{"error": {...}}`, **không** phải 422
+- [ ] `allowed_deck_ids: []` → `400 INVALID_SCOPE`, và **không tốn một token nào**
+- [ ] Chủ đề **tiếng Việt** chạy bình thường — đây là ca dùng chính, không phải
+      ca lỗi. Ngược với M8, nơi đoạn thuần tiếng Việt bị từ chối
+- [ ] `level` ngoài `A1`–`C2` → **422**, khác hình dạng với 400 ở trên
+- [ ] `level` bỏ trống → prompt **không** chứa chuỗi `"None"`
+- [ ] Danh sách tránh chứa từ đã có trong phạm vi, và **không bao giờ** chứa từ
+      ngoài `allowed_deck_ids` — kiểm trên chính prompt gửi đi
+- [ ] Chỉ mục rỗng → `avoid_list_size = 0`, `dedup_checked = false`, vẫn trả 200
+- [ ] Hai lượt gọi cùng chủ đề → danh sách tránh **giống hệt nhau** (đã sắp xếp)
+- [ ] `exclude_words` đi vào prompt, và lượt sau ra từ khác lượt trước
+- [ ] Chủ đề được embed **đúng một lần**, không tự nối `"query: "`
+- [ ] Trường model tự thêm (`audio_url`, `card_id`) → không lọt vào kết quả
+- [ ] Trường chứa `=`, tên miền trần, hay ký tự vô hình → thẻ bị loại,
+      `dropped_unsafe` tăng
+- [ ] `meaning` không có dấu tiếng Việt → thẻ bị loại (model đang trả lời bằng
+      tiếng Anh vào ô nghĩa tiếng Việt)
+- [ ] Câu ví dụ không dùng chính từ đó → thẻ bị loại, `dropped_incoherent` tăng
+- [ ] Model trả cùng một từ hai lần → chỉ giữ một, `dropped_duplicate_in_batch` tăng
+- [ ] Model trả nhiều hơn `count` → cắt về đúng `count`
+- [ ] Model trả `{"words": []}` → **503**, KHÔNG phải 200 rỗng. Đây là chỗ cố ý
+      ngược M8
+- [ ] Model trả rác không phải JSON → **503**
+- [ ] `stats.llm_calls` luôn bằng 1, kể cả khi model trả rác
+- [ ] Hàng đợi bận quá 10 giây → **429**, và **không** đốt lời gọi provider nào
+- [ ] `service.vocab._sem is service.vocab_generator._sem` — hai endpoint đắt
+      tiền dùng CHUNG một hàng đợi
+- [ ] Lượt gọi đắt nhất (chủ đề dài nhất, danh sách tránh đầy, `count` trần) đặt
+      chỗ **≤ 70%** ngân sách một phút — có test khoá lại, và nó có HAI khẳng
+      định: một cho ngưỡng thảm hoạ, một cho ngưỡng thiết kế
+- [ ] Hai endpoint `/vocab/*` trỏ về **cùng một** `$ref` `VocabCandidate` trong
+      `/openapi.json`
 
 ---
 

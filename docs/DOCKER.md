@@ -60,7 +60,7 @@ trước khi dùng nghiêm túc thì sửa hai chỗ:
 | Biến | Để nguyên thì sao | Nên đổi thành |
 |---|---|---|
 | `AI_INTERNAL_TOKEN` | Là `dev-token` — ai biết cũng gọi được API | `python -c "import secrets;print(secrets.token_hex(32))"` |
-| `AI_LLM_API_KEY` | Rỗng. Ba nhánh 0 token vẫn chạy; nhánh `RAG` và `POST /vocab/extract` trả `503` | Khoá Groq dạng `gsk_...` |
+| `AI_LLM_API_KEY` | Rỗng. Ba nhánh 0 token vẫn chạy; nhánh `RAG` và cả hai `POST /vocab/*` trả `503` | Khoá Groq dạng `gsk_...` |
 
 > **Quy tắc khi sửa `.env`:** biến để trống thì chú thích phải nằm ở **dòng riêng** phía trên.
 > Viết `AI_FOO=   # giải thích` sẽ khiến thư viện đọc `.env` lấy nguyên chuỗi `# giải thích`
@@ -129,7 +129,7 @@ http://localhost:8000/docs
    bấm **Execute**.
 
 Mọi ví dụ đều chạy được ngay với dữ liệu mẫu, trừ những ví dụ đi vào nhánh LLM (`RAG`,
-`FILL_BLANK`, và toàn bộ `POST /vocab/extract`) — chúng cần `AI_LLM_API_KEY`.
+`FILL_BLANK`, và toàn bộ hai endpoint `POST /vocab/*`) — chúng cần `AI_LLM_API_KEY`.
 
 ---
 
@@ -558,7 +558,7 @@ AI_DB_PATH=/data/fsoft-ai.db
 FASTEMBED_CACHE_PATH=/opt/fastembed_cache
 
 AI_INTERNAL_TOKEN=<chuỗi ngẫu nhiên 64 ký tự>
-AI_LLM_API_KEY=<khoá Groq; để trống thì mất nhánh RAG và cả /vocab/extract>
+AI_LLM_API_KEY=<khoá Groq; để trống thì mất nhánh RAG và cả hai /vocab/*>
 
 AI_SOURCE_MODE=fixture
 ```

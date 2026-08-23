@@ -324,7 +324,13 @@ class UsageStatsResponse(BaseModel):
                     "prompt_tokens": 41200,
                     "completion_tokens": 12800,
                     "total_tokens": 54000,
-                    "by_task": {"CHAT": 96, "REWRITE": 28, "QUIZ": 13, "VOCAB_EXTRACT": 4},
+                    "by_task": {
+                        "CHAT": 96,
+                        "REWRITE": 28,
+                        "QUIZ": 13,
+                        "VOCAB_EXTRACT": 4,
+                        "VOCAB_GENERATE": 7,
+                    },
                     "by_answer_source": {
                         "DIRECT_LOOKUP": 31,
                         "CACHE": 12,
@@ -377,7 +383,7 @@ class UsageStatsResponse(BaseModel):
     calls: int = Field(
         description=(
             "Tổng số dòng nhật ký trong cửa sổ, gồm mọi tác vụ (`CHAT`, `REWRITE`, "
-            "`QUIZ`, `VOCAB_EXTRACT`) và gồm cả lượt trả lời 0 token. Vì vậy luôn `calls >= chat_turns`. "
+            "`QUIZ`, `VOCAB_EXTRACT`, `VOCAB_GENERATE`) và gồm cả lượt trả lời 0 token. Vì vậy luôn `calls >= chat_turns`. "
             "Đây là mẫu số của `error_rate`."
         ),
         examples=[137],
@@ -420,7 +426,7 @@ class UsageStatsResponse(BaseModel):
             "`REWRITE` cao gần bằng `CHAT` nghĩa là hầu hết lượt chat đều phải viết lại "
             "câu hỏi — mỗi lần như vậy tốn thêm một lượt gọi LLM."
         ),
-        examples=[{"CHAT": 96, "REWRITE": 28, "QUIZ": 13, "VOCAB_EXTRACT": 4}],
+        examples=[{"CHAT": 96, "REWRITE": 28, "QUIZ": 13, "VOCAB_EXTRACT": 4, "VOCAB_GENERATE": 7}],
     )
     by_answer_source: dict[str, int] = Field(
         description=(

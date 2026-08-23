@@ -1,10 +1,22 @@
 """
-Schema cho `POST /internal/v1/vocab/extract`. SPEC muc 8.5b.
+Schema cho `/internal/v1/vocab/extract` (SPEC muc 8.5b) và `/vocab/generate`
+(SPEC muc 8.5c).
+
+Hai endpoint dùng CHUNG một `VocabCandidate`. Đó là chủ ý: backend đã bind vào
+shape thẻ ấy từ M8, tách ra thành hai lớp giống hệt nhau chỉ đẻ thêm một type
+Java, một Jackson binding và một mapper, đổi lại con số không.
+
+Chúng khác nhau đúng một điều, và điều đó KHÔNG nằm ở hình dạng thẻ mà nằm ở
+XUẤT XỨ của `example_sentence`: `extract` bảo đảm câu ấy có thật trong văn bản
+người dùng dán vào, `generate` thì không có văn bản nào để bảo đảm. Xem mô tả
+của chính trường đó.
 
 Quy tắc viết mô tả ở đây giống mọi file schema khác: nói HẬU QUẢ CỦA VIỆC HIỂU
 SAI, đừng nói lại tên trường. Viết "trường này là id của deck" thì không cứu
 được ai.
 """
+
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -80,9 +92,10 @@ VI_DU_VOCAB_EXTRACT: dict = {
 class VocabCandidate(BaseModel):
     word: str = Field(
         description=(
-            "Dạng từ điển, chữ thường. CÓ THỂ khác dạng xuất hiện trong đoạn văn: "
-            "văn bản có `running` thì thẻ ghi `run`, vì thẻ từ vựng cần dạng gốc. "
-            "Đó là chủ ý, không phải lỗi."
+            "Dạng từ điển, chữ thường.\n\n"
+            "Ở `/vocab/extract`, CÓ THỂ khác dạng xuất hiện trong đoạn văn: văn bản "
+            "có `running` thì thẻ ghi `run`, vì thẻ từ vựng cần dạng gốc. Đó là chủ "
+            "ý, không phải lỗi."
         ),
         examples=["resilient"],
     )
@@ -114,14 +127,21 @@ class VocabCandidate(BaseModel):
     )
     example_sentence: str = Field(
         description=(
-            "**Đảm bảo có thật trong đoạn văn bạn gửi lên.** Service so khớp câu "
-            "này với văn bản gốc sau khi bỏ qua khác biệt hình thức (nháy cong so "
-            "với nháy thẳng, gạch dài so với gạch ngắn, khoảng trắng, hoa thường); "
-            "không khớp thì **cả ứng viên bị loại**, không phải chỉ xoá trường này.\n\n"
-            "Vì sao khắt khe: kết quả ở đây sẽ được lưu thành thẻ và chia sẻ được, "
-            "nên đây là trường duy nhất LLM có thể dùng để đưa nội dung mới vào dữ "
-            "liệu lưu trữ. Bắt buộc nó phải có sẵn trong văn bản là cách đóng đường "
-            "đó lại. Số ứng viên bị loại nằm ở `stats.dropped_not_grounded`."
+            "**Bảo đảm của trường này KHÁC NHAU giữa hai endpoint. Đừng render "
+            "chung một câu giải thích.**\n\n"
+            "`/vocab/extract` — câu này **có thật trong đoạn văn bạn gửi lên**. "
+            "Service so khớp lại với văn bản gốc sau khi bỏ qua khác biệt hình thức "
+            "(nháy cong so với nháy thẳng, gạch dài so với gạch ngắn, khoảng trắng, "
+            "hoa thường); không khớp thì **cả ứng viên bị loại**. Đây là trường duy "
+            "nhất LLM có thể dùng để đưa nội dung mới vào dữ liệu lưu trữ, nên bắt "
+            "buộc nó có sẵn trong văn bản chính là cách đóng đường đó lại.\n\n"
+            "`/vocab/generate` — **không có văn bản nguồn nào để so khớp.** Câu do "
+            "model tự viết. Service chỉ kiểm được hình dạng: độ dài, bộ ký tự, và "
+            "việc câu có thật sự chứa chính từ đó. Không có phép kiểm nào nói được "
+            "câu ấy đúng ngữ pháp hay đúng nghĩa.\n\n"
+            "Cờ phân biệt máy đọc được là **`stats.dropped_not_grounded`**: có ở "
+            "`extract`, KHÔNG có ở `generate`. Backend nào cần rẽ nhánh theo xuất xứ "
+            "thì rẽ theo trường đó, đừng rẽ theo URL đã gọi."
         ),
         examples=["The team stayed resilient after missing the first deadline."],
     )
@@ -377,3 +397,248 @@ class VocabExtractResponse(BaseModel):
         )
     )
     stats: VocabExtractStats
+
+
+# ---------------------------------------------------------------
+# M9 — POST /internal/v1/vocab/generate
+# ---------------------------------------------------------------
+
+# Ba ví dụ, cùng vai trò với `VI_DU_VOCAB_EXTRACT`: menu thả xuống của Swagger
+# và tab "Schema" lấy chung một nguồn nên không lệch nhau được.
+#
+# Ví dụ thứ hai CỐ Ý dùng chủ đề công việc với `allowed_deck_ids` chứa deck 2 —
+# bộ thẻ mẫu ở deck đó toàn từ công sở (`deadline`, `procurement`,
+# `stakeholder`...), nên bấm Execute là thấy ngay danh sách tránh hoạt động:
+# kết quả sẽ KHÔNG lặp lại mấy từ ấy.
+VI_DU_VOCAB_GENERATE: dict = {
+    "chu_de_tieng_anh": {
+        "summary": "Chủ đề gõ bằng tiếng Anh",
+        "description": "Dạng ngắn gọn nhất. `level` bỏ trống nghĩa là không ràng buộc trình độ.",
+        "value": {
+            "topic": "air travel",
+            "allowed_deck_ids": [1, 2, 3, 4],
+            "count": 5,
+        },
+    },
+    "chu_de_tieng_viet_co_tranh": {
+        "summary": "Chủ đề tiếng Việt — xem danh sách tránh hoạt động",
+        "description": (
+            "Deck 2 của bộ thẻ mẫu toàn từ công sở. Kết quả sẽ tránh chính những "
+            "từ đó, vì service tìm ngữ nghĩa trong phạm vi rồi đưa vào prompt."
+        ),
+        "value": {
+            "topic": "tôi muốn học từ về công việc",
+            "allowed_deck_ids": [1, 2, 3, 4],
+            "level": "B2",
+            "count": 6,
+        },
+    },
+    "xin_them_tu": {
+        "summary": "Lượt thứ hai — xin thêm từ, không lặp lại lượt đầu",
+        "description": (
+            "`exclude_words` là những từ giao diện VỪA hiện cho người dùng ở lượt "
+            "trước. Client giữ trạng thái, service không lưu gì — đúng cách `/chat` "
+            "làm với `history`."
+        ),
+        "value": {
+            "topic": "tôi muốn học từ về công việc",
+            "allowed_deck_ids": [1, 2, 3, 4],
+            "level": "B2",
+            "count": 6,
+            "exclude_words": ["itinerary", "layover", "boarding pass"],
+        },
+    },
+}
+
+
+class VocabGenerateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [vi_du["value"] for vi_du in VI_DU_VOCAB_GENERATE.values()]}
+    )
+
+    topic: str = Field(
+        description=(
+            'Chủ đề muốn học, gõ tự do. Nhận cả `"work"` lẫn cả câu '
+            '`"tôi muốn học từ về công việc"` — model tự hiểu và trả lại cách nó '
+            "hiểu ở `topic_understood`.\n\n"
+            "Tối đa **120 ký tự**. Vượt quá trả **400 `INVALID_REQUEST`** với hình "
+            'dạng `{"error": {...}}`, KHÔNG phải 422 với `{"detail": [...]}`. '
+            "Hai hình dạng lỗi khác nhau là cố ý: 400 cho luật nghiệp vụ, 422 cho "
+            "sai kiểu. Parser phải chịu được cả hai.\n\n"
+            "Đây là chỗ DUY NHẤT người dùng gõ chữ tự do vào prompt của endpoint "
+            "này. Service làm sạch nó và bọc trong thẻ có nonce trước khi gửi đi, "
+            "nhưng vẫn nên coi mọi thứ đi ra là nội dung người dùng gây ảnh hưởng "
+            "được."
+        ),
+        examples=["tôi muốn học từ về công việc"],
+    )
+    allowed_deck_ids: list[int] = Field(
+        description=(
+            "Phạm vi bộ thẻ. Rỗng → **400 `INVALID_SCOPE`**, không bao giờ có nghĩa "
+            '"không lọc".\n\n'
+            "Ở đây nó làm HAI việc, khác `/vocab/extract` chỉ làm một: (1) giới hạn "
+            "những thẻ mà service đọc để dựng danh sách tránh, (2) quyết định cờ "
+            "`already_in_deck`. Service không bao giờ đọc thẻ ngoài danh sách này, "
+            "kể cả chỉ để quyết định KHÔNG sinh ra từ gì.\n\n"
+            "Nó **không** lọc đầu ra: kết quả là từ mới, không phải thẻ có sẵn."
+        ),
+        examples=[[1, 2, 3, 4]],
+    )
+    level: Literal["A1", "A2", "B1", "B2", "C1", "C2"] | None = Field(
+        default=None,
+        description=(
+            "Trình độ nhắm tới theo khung CEFR. Bỏ trống là không ràng buộc.\n\n"
+            "**Đây là gợi ý cho model, KHÔNG phải bảo đảm.** Service không có danh "
+            "sách từ theo CEFR nên không kiểm lại được. Đừng dựng giao diện hứa hẹn "
+            '"từ vựng trình độ A1" như một sự thật đã kiểm chứng.\n\n'
+            "Giá trị ngoài sáu mức trả **422** — đó là lỗi kiểu, khác hình dạng với "
+            "400 của `topic` quá dài."
+        ),
+        examples=["B2"],
+    )
+    count: int = Field(
+        default=5,
+        ge=1,
+        le=6,
+        description=(
+            "Số thẻ muốn sinh. Trần là ràng buộc NGÂN SÁCH TOKEN, không phải con số "
+            "tuỳ tiện — xem mô tả endpoint.\n\n"
+            "Model có thể trả ít hơn nếu chủ đề quá hẹp, và đó là hành vi đúng: thà "
+            "bốn từ đúng chủ đề còn hơn tám từ gượng ép. Ngoài khoảng trả **422**."
+        ),
+        examples=[6],
+    )
+    exclude_words: list[str] = Field(
+        default_factory=list,
+        description=(
+            'Những từ ĐỪNG sinh lại. Đây là cách làm nút "thêm từ nữa" mà không '
+            "cần service lưu trạng thái: giao diện gửi lại chính những từ nó vừa "
+            "hiện cho người dùng, và lượt sau sẽ ra từ khác.\n\n"
+            "Client giữ trạng thái, service không lưu gì — đúng cách `/chat` làm với "
+            "`history`, và đúng ranh giới SPEC mục 5.1.\n\n"
+            "Được ưu tiên hơn danh sách tránh mà service tự tìm được, vì đây là thứ "
+            "người dùng VỪA nhìn thấy. Tổng hai nguồn bị cắt ở 40 mục; từ nào sai "
+            "định dạng bị bỏ lặng lẽ và đếm ở `stats.avoid_list_dropped`."
+        ),
+        examples=[["itinerary", "layover"]],
+    )
+
+
+class VocabGenerateStats(BaseModel):
+    topic_chars: int = Field(examples=[27])
+    level: str | None = Field(
+        description="Trình độ đã gửi, `null` nếu bỏ trống. Ghi lại để đối chiếu log.",
+        examples=["B2"],
+    )
+    requested: int = Field(
+        description="Số thẻ đã xin. So với `len(cards)` để biết model trả thiếu bao nhiêu.",
+        examples=[6],
+    )
+    avoid_list_size: int = Field(
+        description=(
+            "Số từ đã đưa vào prompt để model tránh, gộp cả `exclude_words` lẫn phần "
+            "service tự tìm trong phạm vi.\n\n"
+            "Bằng `0` nghĩa là model không được cảnh báo gì — hoặc chỉ mục còn rỗng, "
+            "hoặc phạm vi deck không có thẻ nào. Khi đó khả năng ra từ trùng cao hẳn "
+            "lên, dù cờ `already_in_deck` vẫn đúng."
+        ),
+        examples=[18],
+    )
+    avoid_list_dropped: int = Field(
+        description=(
+            "Số mục bị loại khỏi danh sách tránh vì sai định dạng.\n\n"
+            "Khác `0` ở môi trường thật nghĩa là một trong hai: dữ liệu đồng bộ về "
+            "có `word` không phải là từ (lỗi chất lượng dữ liệu đáng biết), hoặc có "
+            "người cố tình dựng một thẻ để tấn công prompt này. Cả hai đều nên nhìn "
+            "thấy được."
+        ),
+        examples=[0],
+    )
+    returned_by_llm: int = Field(
+        description=(
+            "Số mục model trả về TRƯỚC mọi bộ lọc.\n\n"
+            "Khác `/vocab/extract`: ở đây `0` **không** phải câu trả lời hợp lệ. "
+            '"Chủ đề của bạn không có từ vựng nào" gần như không bao giờ đúng, nên '
+            "`0` nghĩa là model từ chối hoặc trả rác — service trả **503**, không "
+            "trả 200 rỗng."
+        ),
+        examples=[6],
+    )
+    dropped_unsafe: int = Field(
+        description=(
+            "Bị loại vì độ dài, bộ ký tự, ký tự vô hình, hay sai ngôn ngữ (nghĩa "
+            "tiếng Việt mà không có dấu, câu tiếng Anh mà lại có dấu tiếng Việt)."
+        ),
+        examples=[0],
+    )
+    dropped_incoherent: int = Field(
+        description=(
+            "Bị loại vì câu ví dụ không thật sự dùng chính từ đó, hoặc không phải "
+            "một câu hoàn chỉnh.\n\n"
+            "Đây là phép kiểm CHẤT LƯỢNG, không phải phép kiểm an toàn. Nó bắt model "
+            "cẩu thả, không bắt được kẻ tấn công. Cũng không nhận ra động từ bất quy "
+            "tắc (`give` trong câu chia thành `gave`), nên thỉnh thoảng nó bỏ nhầm "
+            "một thẻ đúng — hậu quả là mất một từ, không phải lọt một thẻ sai."
+        ),
+        examples=[1],
+    )
+    dropped_duplicate_in_batch: int = Field(
+        description=(
+            "Model trả cùng một từ hai lần trong một lượt. Với chủ đề hẹp đây là lỗi "
+            "thường gặp, khác hẳn `/vocab/extract` nơi hai ứng viên lấy từ một đoạn "
+            "văn tự nhiên đã khác nhau.\n\n"
+            "Chỉ khử theo `word` đã chuẩn hoá, KHÔNG khử theo gốc từ: `manage`, "
+            "`manager`, `management` là ba thẻ chính đáng."
+        ),
+        examples=[0],
+    )
+    already_in_deck_count: int = Field(
+        description=(
+            "Số thẻ trả về mà người học đã có. Khác `0` nghĩa là model bỏ qua danh "
+            "sách tránh — vẫn đúng, không phải lỗi: danh sách tránh là lời khuyên, "
+            "`already_in_deck` mới là luật."
+        ),
+        examples=[1],
+    )
+    dedup_checked: bool = Field(
+        description=(
+            "`false` nghĩa là chỉ mục đang RỖNG nên mọi cờ `already_in_deck` đều vô "
+            "nghĩa, và danh sách tránh cũng rỗng theo. Xảy ra trong cửa sổ sau khi "
+            "container khởi động lại mà đồng bộ đầu tiên chưa xong — `/readyz` đã "
+            "trả 200 từ trước đó. Luôn kiểm trường này trước khi tin các cờ."
+        ),
+        examples=[True],
+    )
+    llm_calls: int = Field(
+        description="Luôn bằng 1. Endpoint này không thử lại — xem mô tả endpoint.",
+        examples=[1],
+    )
+    prompt_tokens: int = Field(examples=[1042])
+    completion_tokens: int = Field(examples=[1876])
+    latency_ms: int = Field(examples=[6210])
+
+
+class VocabGenerateResponse(BaseModel):
+    topic_understood: str | None = Field(
+        description=(
+            "Chủ đề mà model hiểu, viết bằng tiếng Việt. Hiện lại cho người dùng để "
+            "họ biết ngay là mình bị hiểu sai, thay vì phải đọc hết sáu thẻ mới nhận "
+            "ra.\n\n"
+            "`null` khi model không trả trường này hoặc trả một giá trị không qua "
+            "được chốt chặn ký tự. Khi đó cứ hiện lại nguyên chủ đề người dùng gõ."
+        ),
+        examples=["Công việc và nơi làm việc"],
+    )
+    cards: list[VocabCandidate] = Field(
+        description=(
+            "Thẻ đã dựng sẵn đủ trường, đúng shape để backend lưu thẳng.\n\n"
+            "**Mọi trường ở đây đều do model bịa ra.** Service kiểm được hình dạng — "
+            "độ dài, bộ ký tự, ngôn ngữ, câu ví dụ có dùng đúng từ không — nhưng "
+            "KHÔNG kiểm được và không thể kiểm được: nghĩa tiếng Việt có đúng không, "
+            "phiên âm có thật không, từ đó có tồn tại trong tiếng Anh không, có đúng "
+            "trình độ đã xin không.\n\n"
+            "Đừng trình bày mấy thẻ này như đã được kiểm chứng. Bước người dùng tick "
+            "chọn là lần soát nội dung duy nhất mà chúng sẽ có."
+        )
+    )
+    stats: VocabGenerateStats

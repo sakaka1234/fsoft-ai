@@ -9,18 +9,12 @@ bảo NỘI DUNG đúng.
 import re
 from dataclasses import dataclass
 
+from app.core.text import co_dau_tieng_viet
 from app.quiz.distractors import normalize_meaning
 from app.schemas.quiz import QuestionType, QuizQuestion
 
 BLANK = "______"
 REQUIRED_OPTIONS = 4
-
-# Chữ cái chỉ có trong bảng chữ tiếng Việt — dùng để khẳng định lời giải thích
-# đúng là tiếng Việt chứ không phải model trả lời bằng tiếng Anh.
-_VIETNAMESE_RE = re.compile(
-    r"[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]",
-    re.IGNORECASE,
-)
 
 
 @dataclass(slots=True)
@@ -85,7 +79,7 @@ def _check_explanation(question: QuizQuestion) -> ValidationResult:
     if not question.explanation.strip():
         return ValidationResult(False, "thiếu giải thích")
 
-    if not _VIETNAMESE_RE.search(question.explanation):
+    if not co_dau_tieng_viet(question.explanation):
         return ValidationResult(False, "giải thích không phải tiếng Việt")
 
     return ValidationResult(True)

@@ -50,6 +50,7 @@ from app.sync.http_source import HttpCardSource
 from app.sync.source import CardSource
 from app.sync.syncer import Syncer
 from app.vocab.extractor import VocabExtractor
+from app.vocab.generator import VocabGenerator
 
 log = get_logger(__name__)
 
@@ -94,7 +95,10 @@ truyền vào.
   Tuyệt đối không hiểu thành "không lọc".
 - Thẻ ngoài danh sách sẽ không bao giờ xuất hiện, kể cả trong trích dẫn của câu
   trả lời, trong đáp án nhiễu của quiz, hay trong cờ `already_in_deck` /
-  `existing_card_id` của `/vocab/extract`.
+  `existing_card_id` của `/vocab/*`.
+- Ở `/vocab/generate`, danh sách này còn giới hạn cả những thẻ mà service đọc
+  để dựng danh sách từ cần **tránh**. Nghĩa là service không nhìn ra ngoài phạm
+  vi kể cả chỉ để quyết định KHÔNG sinh ra từ gì.
 
 ---
 
@@ -119,9 +123,11 @@ hơn. Ngưỡng cần giữ là **trung bình < 1.200 token mỗi lượt chat**
 
 `POST /search` và quiz với `use_ai_context=false` **luôn** 0 token.
 
-`POST /vocab/extract` thì ngược lại: **luôn** tốn token, không có nhánh rẻ nào,
-và là lời gọi đắt nhất service nhận — một lượt đặt chỗ tới ~5.500 trên ngân
-sách 6.400 token mỗi phút. Gọi tuần tự, đừng bắn song song.
+Hai endpoint `/vocab/*` thì ngược lại: **luôn** tốn token, không có nhánh rẻ
+nào. `extract` đặt chỗ tới ~5.500 trên ngân sách 6.400 token mỗi phút, còn
+`generate` rẻ hơn (~4.400) vì prompt của nó ngắn hơn nhiều. Cả hai dùng chung
+một hàng đợi, chỉ một lượt chạy tại một thời điểm. Gọi tuần tự, đừng bắn song
+song.
 
 ---
 
@@ -186,9 +192,12 @@ OPENAPI_TAGS = [
     {
         "name": "Internal - Từ vựng",
         "description": (
-            "Trích thẻ từ vựng từ một đoạn văn người dùng dán vào. **Luôn tốn "
-            "token** và không có đường lùi 0 token — đây là endpoint đắt nhất ở "
-            "đây. Service trả về ứng viên, backend mới là bên lưu."
+            "Hai đường dựng thẻ từ vựng: `extract` từ một đoạn văn người dùng "
+            "dán vào, `generate` từ một chủ đề người dùng gõ. **Luôn tốn token** "
+            "và không có đường lùi 0 token — hai endpoint đắt nhất ở đây.\n\n"
+            "Service trả về ứng viên, backend mới là bên lưu. Khác biệt quan "
+            "trọng: `extract` bảo đảm câu ví dụ có thật trong văn bản người dùng "
+            "gửi lên, `generate` thì mọi trường đều do model bịa ra."
         ),
     },
     {
@@ -261,6 +270,7 @@ class Service:
     orchestrator: ChatOrchestrator
     quiz: QuizGenerator
     vocab: VocabExtractor
+    vocab_generator: VocabGenerator
 
     encoder_ready: bool = False
     index_ready: bool = False
@@ -297,6 +307,11 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
     encoder = encoder or Encoder(settings)
     source = build_source(settings)
     budget = TokenBudget(settings.ai_global_tokens_per_minute)
+
+    # MOT hang doi dung chung cho ca hai endpoint dat tien. Xem chu thich
+    # trong VocabExtractor.__init__: muc dich cua no la ngan sach token cua
+    # TOAN he thong, nen no khong thuoc rieng endpoint nao.
+    heavy_sem = asyncio.Semaphore(1)
     prompts = PromptRegistry()
     llm = LlmClient(settings, budget, usage_repo)
     intent_classifier = IntentClassifier(encoder, min_margin=settings.ai_intent_min_margin)
@@ -353,7 +368,17 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
             usage_repo=usage_repo,
         ),
         quiz=QuizGenerator(settings=settings, index=index, llm=llm, prompts=prompts),
-        vocab=VocabExtractor(settings=settings, index=index, llm=llm, prompts=prompts),
+        vocab=VocabExtractor(
+            settings=settings, index=index, llm=llm, prompts=prompts, sem=heavy_sem
+        ),
+        vocab_generator=VocabGenerator(
+            settings=settings,
+            index=index,
+            encoder=encoder,
+            llm=llm,
+            prompts=prompts,
+            sem=heavy_sem,
+        ),
     )
 
 

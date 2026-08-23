@@ -1,0 +1,9 @@
+<TU_DA_CO id="{{nonce}}">
+{{avoid_list}}
+</TU_DA_CO {{nonce}}>
+
+<CHU_DE id="{{nonce}}">
+{{topic}}
+</CHU_DE {{nonce}}>
+
+Soạn thẻ từ vựng cho chủ đề trên, trả về JSON đúng dạng đã mô tả.

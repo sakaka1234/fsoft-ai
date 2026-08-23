@@ -1,8 +1,8 @@
 # fsoft-ai
 
 Service RAG cho nền tảng học từ vựng tiếng Anh. Trả lời câu hỏi **chỉ dựa trên bộ thẻ
-của chính người học**, tìm kiếm ngữ nghĩa, sinh câu hỏi ôn tập, và trích từ vựng đáng học
-từ một đoạn văn.
+của chính người học**, tìm kiếm ngữ nghĩa, sinh câu hỏi ôn tập, trích từ vựng đáng học
+từ một đoạn văn, và dựng thẻ từ vựng mới theo một chủ đề người dùng gõ.
 
 Chạy độc lập với backend Java. Đặc tả đầy đủ ở [docs/SPEC.md](docs/SPEC.md); cách gọi
 từ phía Java ở [docs/BACKEND_INTEGRATION.md](docs/BACKEND_INTEGRATION.md).
@@ -27,9 +27,10 @@ tiền trước, và chỉ những câu thật sự cần suy luận mới chạ
 | `RAG` | ~800–1.200 | Cần LLM diễn giải trên ngữ cảnh lấy từ bộ thẻ |
 | `LLM_ONLY` | ~600 | Không thẻ nào khớp — trả lời kèm cảnh báo |
 
-Bảng trên chỉ nói về **lượt chat**. `POST /internal/v1/search` luôn 0 token, còn
-`POST /internal/v1/vocab/extract` thì ngược lại — luôn tốn token, không có nhánh rẻ nào, và
-là lời gọi đắt nhất service nhận (một lượt đặt chỗ tới 87% ngân sách một phút).
+Bảng trên chỉ nói về **lượt chat**. `POST /internal/v1/search` luôn 0 token, còn hai
+endpoint `POST /internal/v1/vocab/*` thì ngược lại — luôn tốn token, không có nhánh rẻ
+nào. `extract` đặt chỗ tới 87% ngân sách một phút, `generate` là 68%. Cả hai dùng chung
+một hàng đợi nên chỉ một lượt chạy tại một thời điểm.
 
 Mục tiêu vận hành: **≥ 40% lượt chat rơi vào ba nhánh 0 token**. Dưới ngưỡng này nghĩa
 là đang trả tiền cho việc mà dữ liệu cục bộ làm được miễn phí — xem `GET /internal/v1/stats`.
@@ -273,7 +274,7 @@ lượt tốn token do `LlmClient` ghi — cả hai cùng `task = "CHAT"` nên m
 ## Test và bộ đo
 
 ```bash
-uv run pytest -q                        # 288 test, không cần mạng
+uv run pytest -q                        # 343 test, không cần mạng
 uv run python scripts/run_eval.py       # bộ đo retrieval, 40 case
 uv run ruff check . && uv run mypy app
 ```
@@ -311,11 +312,11 @@ app/
   schemas/      pydantic model cho request/response
   store/        SQLite thuần SQL, không ORM
   sync/         syncer, nguồn HTTP và nguồn fixture
-  vocab/        trích từ vựng từ đoạn văn, chốt chặn bám văn bản
+  vocab/        trích từ đoạn văn (M8) + sinh theo chủ đề (M9), chốt chặn riêng
 docs/           SPEC · M0_FINDINGS · BACKEND_INTEGRATION · BACKEND_FEEDBACK
 migrations/     001_init.sql
 scripts/        spike M0, tải model, chạy bộ đo
-tests/          288 test + bộ đo 40 case
+tests/          343 test + bộ đo 40 case
 ```
 
 ---
