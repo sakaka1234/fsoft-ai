@@ -273,7 +273,7 @@ lượt tốn token do `LlmClient` ghi — cả hai cùng `task = "CHAT"` nên m
 ## Test và bộ đo
 
 ```bash
-uv run pytest -q                        # 226 test, không cần mạng
+uv run pytest -q                        # 288 test, không cần mạng
 uv run python scripts/run_eval.py       # bộ đo retrieval, 40 case
 uv run ruff check . && uv run mypy app
 ```
@@ -311,10 +311,11 @@ app/
   schemas/      pydantic model cho request/response
   store/        SQLite thuần SQL, không ORM
   sync/         syncer, nguồn HTTP và nguồn fixture
+  vocab/        trích từ vựng từ đoạn văn, chốt chặn bám văn bản
 docs/           SPEC · M0_FINDINGS · BACKEND_INTEGRATION · BACKEND_FEEDBACK
 migrations/     001_init.sql
 scripts/        spike M0, tải model, chạy bộ đo
-tests/          226 test + bộ đo 40 case
+tests/          288 test + bộ đo 40 case
 ```
 
 ---

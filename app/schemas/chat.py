@@ -149,14 +149,14 @@ class ChatOptions(BaseModel):
         ge=16,
         le=4096,
         description=(
-            "Trần độ dài câu trả lời. Bỏ trống = `AI_MAX_OUTPUT_TOKENS` (mặc định 400).\n\n"
+            "Trần độ dài câu trả lời. Bỏ trống = `AI_MAX_OUTPUT_TOKENS` (mặc định 700).\n\n"
             "**Hiện chỉ `/chat/stream` đọc field này.** `POST /chat` bỏ qua nó và "
             "luôn dùng giá trị cấu hình — đặt ở đây rồi thấy câu trả lời không "
             "ngắn đi thì đó là lý do.\n\n"
             "Đặt quá thấp (ví dụ 16) thì câu trả lời bị cắt ngang, kéo theo mã "
             "`[#id]` ở cuối câu biến mất và `used_in_answer` sẽ toàn `false`."
         ),
-        examples=[400],
+        examples=[700],
     )
 
 

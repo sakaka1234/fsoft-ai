@@ -1170,6 +1170,9 @@ fsoft-ai/
     ├── test_llm_client.py
     ├── test_chat.py
     ├── test_quiz.py
+    ├── test_vocab.py
+    ├── test_config.py
+    ├── test_stats.py
     └── test_security.py
 ```
 
@@ -1721,8 +1724,11 @@ AI_FULL_SWEEP_INTERVAL_SECONDS=3600     # quét ID phát hiện thẻ bị xoá
 
 # ---- Embedding ----
 AI_EMBEDDING_MODEL=intfloat/multilingual-e5-small
+# Ba dòng dưới PHẢI đổi cùng nhau. Sai cặp thì cổng lọc sai âm thầm.
+AI_EMBEDDING_MODEL_FILE=onnx/model_tia113k.onnx
 AI_EMBEDDING_DIM=384
-AI_MODEL_VERSION=multilingual-e5-small@t1
+AI_MODEL_VERSION=e5-small-q8-tia113k@t1
+AI_ONNX_CPU_ARENA=false
 AI_QUERY_PREFIX="query: "
 AI_PASSAGE_PREFIX="passage: "
 AI_EMBED_BATCH_SIZE=32
@@ -1730,30 +1736,32 @@ AI_EMBED_MAX_TOKENS=512
 FASTEMBED_CACHE_PATH=./.cache/fastembed  # dev local; trong Docker là /opt/fastembed_cache
 OMP_NUM_THREADS=1
 ORT_NUM_THREADS=1
+AI_ORT_INTRA_OP_THREADS=0
 
 # ---- Retrieval ----
 AI_TOP_K=3
 AI_LEXICAL_CANDIDATES=20
 AI_SEMANTIC_CANDIDATES=20
 AI_RRF_K=60
-AI_MIN_SCORE=0.83                         # HIỆU CHỈNH Ở M2, không phải 0.35
+AI_MIN_SCORE=0.8344                       # PHẢI khớp AI_EMBEDDING_MODEL_FILE ở trên
 AI_INTENT_THRESHOLD=0.50                  # không dùng như ngưỡng tuyệt đối
 AI_INTENT_MIN_MARGIN=0.01                 # biên độ hạng nhất so với hạng nhì
 
 # ---- LLM ----
 AI_LLM_BASE_URL=https://api.groq.com/openai/v1
 AI_LLM_API_KEY=
-AI_MODEL_CHAT=llama-3.3-70b-versatile     # LẤY TỪ M0_FINDINGS.md
-AI_MODEL_REWRITE=llama-3.1-8b-instant
-AI_MODEL_QUIZ=llama-3.3-70b-versatile
-AI_MODEL_FALLBACK=llama-3.1-8b-instant
-AI_MAX_OUTPUT_TOKENS=400
+# Bốn model llama của M0 đã bị Groq KHAI TỬ (404 model_not_found).
+AI_MODEL_CHAT=openai/gpt-oss-120b
+AI_MODEL_REWRITE=openai/gpt-oss-20b
+AI_MODEL_QUIZ=openai/gpt-oss-120b
+AI_MODEL_FALLBACK=openai/gpt-oss-20b
+AI_MAX_OUTPUT_TOKENS=700                  # ĐỪNG hạ dưới 300, xem mục 4.1
 AI_TEMPERATURE=0.3
 AI_LLM_TIMEOUT_SECONDS=30
 AI_LLM_MAX_RETRIES=2
 
 # ---- Ngân sách token ----
-AI_GLOBAL_TOKENS_PER_MINUTE=9600          # 80% của 12.000 TPM đo được ở M0
+AI_GLOBAL_TOKENS_PER_MINUTE=6400          # 80% của 8.000 TPM THẬT của gpt-oss
 AI_HISTORY_MAX_MESSAGES=6
 AI_CONTEXT_MAX_CHARS_PER_FIELD=300
 
