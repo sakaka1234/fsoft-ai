@@ -230,7 +230,11 @@ TPM cao gấp đôi dự kiến **không làm các kỹ thuật tiết kiệm b�
 - Không `torch` / `sentence-transformers` / `transformers` — nặng hơn 2 GB.
 - Không MySQL, không Redis, không Docker-compose, không ORM.
 - Không fine-tune model.
-- Không chunking / text splitter.
+- Không chunking / text splitter. `POST /internal/v1/vocab/extract` giữ nguyên
+  luật này: đoạn văn đi vào LLM **nguyên khối**, và cái cap 4.000 ký tự chính là
+  cách né chunking chứ không phải một giới hạn tuỳ tiện. Dài hơn thì trả
+  `400 INVALID_REQUEST` và để backend tự cắt. Ai định "sửa" lỗi 400 đó bằng một
+  text splitter là đang phá đúng ràng buộc này.
 - Không lưu hội thoại trong `fsoft-ai`.
 - Không xử lý JWT, role, quota theo user trong `fsoft-ai`.
 - Không mở service này ra internet.
@@ -739,7 +743,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 -- Nhật ký gọi LLM
 CREATE TABLE IF NOT EXISTS usage_log (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    task              TEXT    NOT NULL,   -- CHAT | REWRITE | QUIZ | EMBED
+    task              TEXT    NOT NULL,   -- CHAT | REWRITE | QUIZ | VOCAB_EXTRACT | EMBED
     provider          TEXT    NOT NULL,
     model             TEXT    NOT NULL,
     answer_source     TEXT,
@@ -799,6 +803,7 @@ POST /internal/v1/chat                 blocking
 POST /internal/v1/chat/stream          SSE
 POST /internal/v1/search
 POST /internal/v1/quiz/generate        blocking, 3–10s
+POST /internal/v1/vocab/extract        blocking, LLM, tối đa 4.000 ký tự
 GET  /internal/v1/index/status
 POST /internal/v1/index/sync           kích hoạt đồng bộ thủ công
        ?sweep=true   quét thêm ID để phát hiện thẻ bị xoá
@@ -953,6 +958,96 @@ Endpoint này phục vụ U019 và đồng thời là công cụ debug retrieval
 
 `last_sync_skipped` là chỉ số hữu ích: nếu nó luôn bằng 0 thì `content_hash` đang không hoạt động và service đang embed lại toàn bộ mỗi 2 phút.
 
+### 8.5b `POST /internal/v1/vocab/extract`
+
+> Đánh số `8.5b` chứ không phải `8.6` là có chủ ý: `§8.6 Định dạng lỗi` đang được
+> trích dẫn từ năm chỗ trong mã nguồn (`app/api/deps.py`, `app/core/errors.py` x2,
+> `app/schemas/errors.py` x2). Chèn số mới vào giữa sẽ làm cả năm trích dẫn đó sai
+> âm thầm. Cùng quy ước với `14.2b` / `14.2c` ở mục 14.
+
+Nhận một đoạn văn tiếng Anh, trả về **thẻ từ vựng ứng viên** đã dựng sẵn đủ trường.
+Service **không lưu gì** — backend quyết định thẻ nào vào deck nào sau khi người
+dùng chọn. Ranh giới mục 5.1 giữ nguyên.
+
+```json
+{
+  "text": "The team stayed resilient after missing the first deadline.",
+  "allowed_deck_ids": [1, 2, 3, 4],
+  "max_candidates": 5
+}
+```
+
+| Tham số | Bắt buộc | Ghi chú |
+|---|---|---|
+| `text` | có | Tối đa **4.000 ký tự**, cần ít nhất 3 từ tiếng Anh phân biệt |
+| `allowed_deck_ids` | có | Rỗng → `400 INVALID_SCOPE`. Ở đây chỉ dùng để đánh dấu trùng, không lọc đầu ra |
+| `max_candidates` | không | Mặc định 5, khoảng 1–**6**. Trần là ràng buộc ngân sách, xem dưới |
+
+```json
+{
+  "candidates": [
+    {
+      "word": "resilient",
+      "phonetic": "/rɪˈzɪliənt/",
+      "part_of_speech": "adj",
+      "meaning": "kiên cường, có khả năng phục hồi nhanh",
+      "definition_en": "able to recover quickly from difficulties",
+      "example_sentence": "The team stayed resilient after missing the first deadline.",
+      "example_meaning": "Cả nhóm vẫn kiên cường sau khi lỡ hạn chót đầu tiên.",
+      "already_in_deck": true,
+      "existing_card_id": 101
+    }
+  ],
+  "stats": {
+    "text_chars": 177, "distinct_english_tokens": 21, "returned_by_llm": 5,
+    "dropped_not_grounded": 0, "dropped_unsafe": 0, "already_in_deck_count": 2,
+    "dedup_checked": true, "llm_calls": 1,
+    "prompt_tokens": 821, "completion_tokens": 1433, "latency_ms": 5005
+  }
+}
+```
+
+`part_of_speech` nhận đúng một trong: `noun`, `verb`, `adj`, `adv`, `prep`, `conj`.
+Giá trị khác bị đổi thành `null` chứ không làm hỏng cả thẻ.
+
+**Khử trùng là đánh dấu, không xoá.** Từ người học đã có vẫn nằm trong kết quả,
+mang `already_in_deck: true` kèm `existing_card_id`. `existing_card_id` **luôn nằm
+trong `allowed_deck_ids`** — service không tiết lộ sự tồn tại của thẻ ngoài phạm
+vi, kể cả qua trường này.
+
+**Ba tầng lọc sau khi model trả lời**, vì kết quả sẽ được LƯU và chia sẻ:
+
+1. Whitelist trường — chỉ bảy khoá đã định đi tiếp.
+2. Chốt chặn ký tự — trường chứa `< > { } [ ] \`, `http`, hay xuống dòng bị loại.
+3. Bám văn bản — `example_sentence` phải có thật trong đoạn văn gửi lên, không thì
+   loại **cả ứng viên**. Đây là trường duy nhất model có thể dùng để đưa nội dung
+   mới vào dữ liệu lưu trữ.
+
+**Một lời gọi LLM, không thử lại.** `stats.llm_calls` luôn bằng 1. Gửi lại nghĩa
+là gửi lại toàn bộ đoạn văn; ba lần như vậy vượt ngân sách của cả một phút.
+
+**Đây là endpoint đắt nhất của service.** Đo thật trên `gpt-oss-120b` với prompt
+thật (số liệu trong `app/vocab/extractor.py`):
+
+| `max_candidates` | token suy luận ẩn | đặt chỗ ở văn bản 4.000 ký tự |
+|---|---|---|
+| 3 | 1.088–1.362 | 70% ngân sách/phút |
+| 6 | 1.183–1.787 | 87% |
+| 10 | 2.643–2.900 | **108% — tự 429 chính mình** |
+
+Phần lớn chi phí là **token suy luận ẩn**, không xuất hiện trong câu trả lời. Đó
+là lý do trần là 6 chứ không phải một con số tròn hơn. Service tự giới hạn một
+lượt trích xuất tại một thời điểm.
+
+**Không có đường lùi 0 token.** Khác quiz (`use_ai_context=false`), ở đây không
+cách nào tự chế nghĩa tiếng Việt của một từ, nên lỗi được trả thật:
+
+| Tình huống | HTTP |
+|---|---|
+| `returned_by_llm = 0`, `candidates` rỗng | **200** — đoạn văn không có gì đáng học |
+| Model trả rác / mọi ứng viên bị loại | **503** `PROVIDER_UNAVAILABLE` |
+| Cạn ngân sách | **429** `BUDGET_EXHAUSTED` kèm `retry_after_seconds` |
+
 ### 8.6 Định dạng lỗi
 
 ```json
@@ -964,7 +1059,7 @@ Endpoint này phục vụ U019 và đồng thời là công cụ debug retrieval
 | Code | HTTP | Ý nghĩa |
 |---|---|---|
 | `INVALID_SCOPE` | 400 | `allowed_deck_ids` rỗng, hoặc `scope_deck_id` không thuộc tập cho phép |
-| `INVALID_REQUEST` | 400 | Sai schema, `question_count` ngoài khoảng, deck quá ít thẻ |
+| `INVALID_REQUEST` | 400 | Sai schema, `question_count` ngoài khoảng, deck quá ít thẻ, `text` vượt 4.000 ký tự |
 | `UNAUTHORIZED` | 401 | Sai hoặc thiếu `X-Internal-Token` |
 | `BUDGET_EXHAUSTED` | 429 | Hết token bucket toàn cục |
 | `PROVIDER_UNAVAILABLE` | 503 | Groq hỏng sau khi đã retry và fallback |
@@ -1007,7 +1102,8 @@ fsoft-ai/
 │   │       ├── search.py
 │   │       ├── quiz.py
 │   │       ├── index.py
-│   │       └── stats.py
+│   │       ├── stats.py
+│   │       └── vocab.py
 │   ├── core/
 │   │   ├── logging.py             # structlog JSON
 │   │   └── errors.py
@@ -1038,7 +1134,8 @@ fsoft-ai/
 │   │       ├── chat_system_v1.txt
 │   │       ├── chat_user_v1.txt
 │   │       ├── query_rewrite_v1.txt
-│   │       └── quiz_fill_blank_v1.txt
+│   │       ├── quiz_fill_blank_v1.txt
+│   │       └── vocab_extract_v1.txt
 │   ├── chat/
 │   │   ├── orchestrator.py        # luồng 12 bước ở mục 11.5
 │   │   ├── direct_answer.py       # trả lời template, 0 token
@@ -1049,11 +1146,15 @@ fsoft-ai/
 │   │   ├── llm_generator.py
 │   │   ├── distractors.py         # chọn nhiễu bằng embedding
 │   │   └── validator.py
+│   ├── vocab/
+│   │   ├── extractor.py           # ★ M8, một lời gọi LLM, không thử lại
+│   │   └── grounding.py           # ★ M8, hàm thuần: câu ví dụ có bám text không
 │   └── schemas/
 │       ├── card.py
 │       ├── chat.py
 │       ├── search.py
 │       ├── quiz.py
+│       ├── vocab.py
 │       └── common.py
 └── tests/
     ├── conftest.py
@@ -1558,6 +1659,35 @@ Câu hỏi cuối: {{question}}
 3. Bộ đo retrieval chạy trong CI, lưu lịch sử Recall@5 để phát hiện hồi quy.
 4. `README.md`: sơ đồ luồng, cách chạy local, cách ép đồng bộ, cách đổi model, cách đọc bảng stats.
 
+### 11.9 M8 — Trích xuất từ vựng từ đoạn văn
+
+> **Ngoài backlog Sprint 2.** Sáu story ở mục 2.4 (U012, U013, U018, U019, U020,
+> U028) không có story nào tương ứng. Đây là phạm vi phát sinh, ghi lại để không ai
+> tưởng nó vốn nằm trong kế hoạch.
+
+Endpoint `POST /internal/v1/vocab/extract`, đặc tả ở [mục 8.5b](#85b-post-internalv1vocabextract).
+
+**Acceptance:**
+
+- [ ] `text` 4.001 ký tự → `400 INVALID_REQUEST`, thông báo nêu **cả** độ dài thật
+      lẫn giới hạn. Là 400 với `{"error": {...}}`, **không** phải 422 với `{"detail": [...]}`
+- [ ] `allowed_deck_ids: []` → `400 INVALID_SCOPE`
+- [ ] Đoạn văn thuần tiếng Việt → `400`, và **không tốn một token nào**
+- [ ] Đoạn văn chứa từ đã có trong phạm vi → ứng viên **vẫn nằm trong kết quả**,
+      mang `already_in_deck: true` kèm `existing_card_id` đúng
+- [ ] Cùng đoạn văn đó với phạm vi hẹp hơn → cờ về `false`
+- [ ] `example_sentence` của mọi ứng viên trả về đều **có thật trong đoạn văn gửi lên**
+- [ ] Câu ví dụ bịa → ứng viên bị loại, `stats.dropped_not_grounded` tăng
+- [ ] Trường chứa `<`, `>` hoặc `http` → ứng viên bị loại, `stats.dropped_unsafe` tăng
+- [ ] Model trả thêm trường lạ (`audio_url`, `card_id`) → không lọt vào kết quả
+- [ ] Model trả `{"words": []}` → **200** với `candidates` rỗng, không phải lỗi
+- [ ] Model trả rác không phải JSON → **503**, không phải 200 rỗng
+- [ ] `stats.llm_calls` luôn bằng 1, kể cả khi model trả rác
+- [ ] Chỉ mục rỗng → `stats.dedup_checked = false`
+- [ ] Thiếu `AI_LLM_API_KEY` → `503 PROVIDER_UNAVAILABLE`, không bao giờ traceback
+- [ ] Lượt gọi đắt nhất (văn bản dài nhất, `max_candidates` trần) vẫn lọt ngân sách
+      một phút — có test khoá lại con số này
+
 ---
 
 ## 12. Cấu hình
@@ -1636,6 +1766,10 @@ AI_SEMANTIC_CACHE_TTL_HOURS=24
 # ---- Quiz ----
 AI_QUIZ_DISTRACTOR_MAX_COSINE=0.92
 AI_QUIZ_LLM_BATCH_SIZE=5
+
+# ---- Trích xuất từ vựng ----
+AI_MODEL_VOCAB=openai/gpt-oss-120b
+AI_VOCAB_MAX_TEXT_CHARS=4000
 
 # ---- Demo mode ----
 AI_DEMO_MODE=false                        # true: hạ ngưỡng cache xuống 0.90

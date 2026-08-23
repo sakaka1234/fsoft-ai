@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 -- Nhật ký gọi LLM
 CREATE TABLE IF NOT EXISTS usage_log (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    task              TEXT    NOT NULL,   -- CHAT | REWRITE | QUIZ | EMBED
+    task              TEXT    NOT NULL,   -- CHAT | REWRITE | QUIZ | VOCAB_EXTRACT | EMBED
     provider          TEXT    NOT NULL,
     model             TEXT    NOT NULL,
     answer_source     TEXT,

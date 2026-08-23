@@ -183,6 +183,20 @@ class Settings(BaseSettings):
     ai_quiz_distractor_max_cosine: float = 0.92
     ai_quiz_llm_batch_size: int = 5
 
+    # ---- Trích xuất từ vựng (M8) ----
+    # Cần JSON mode, và cần đọc hiểu đủ tốt để CHỌN LỌC từ đáng học chứ không
+    # chỉ dịch. Đây là tác vụ khó nhất trong service, nên dùng bản 120b.
+    ai_model_vocab: str = "openai/gpt-oss-120b"
+    # Trần độ dài đoạn văn. Vượt là 400 chứ KHÔNG cắt bớt: cắt im lặng làm người
+    # dùng mất phần cuối bài đọc mà không biết, còn tự chia nhỏ thì vi phạm SPEC
+    # mục 4.2 ("không chunking / text splitter") — chia nhỏ là việc của backend.
+    #
+    # Nâng con số này là nâng thẳng phần ngân sách token mà MỘT request chiếm
+    # của cả hệ thống. Ở 4.000 ký tự với `max_candidates=6`, một lượt gọi đã đặt
+    # chỗ 87% ngân sách mỗi phút; `tests/test_vocab.py` có test khoá lại điều đó
+    # và sẽ đỏ nếu ai nâng lên mà không tính lại.
+    ai_vocab_max_text_chars: int = 4000
+
     # ---- Demo mode ----
     ai_demo_mode: bool = False
 

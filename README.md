@@ -1,7 +1,8 @@
 # fsoft-ai
 
 Service RAG cho nền tảng học từ vựng tiếng Anh. Trả lời câu hỏi **chỉ dựa trên bộ thẻ
-của chính người học**, tìm kiếm ngữ nghĩa, và sinh câu hỏi ôn tập.
+của chính người học**, tìm kiếm ngữ nghĩa, sinh câu hỏi ôn tập, và trích từ vựng đáng học
+từ một đoạn văn.
 
 Chạy độc lập với backend Java. Đặc tả đầy đủ ở [docs/SPEC.md](docs/SPEC.md); cách gọi
 từ phía Java ở [docs/BACKEND_INTEGRATION.md](docs/BACKEND_INTEGRATION.md).
@@ -25,6 +26,10 @@ tiền trước, và chỉ những câu thật sự cần suy luận mới chạ
 | `CACHE` | **0** | Câu tương tự đã hỏi trong 24 giờ, cùng phạm vi deck |
 | `RAG` | ~800–1.200 | Cần LLM diễn giải trên ngữ cảnh lấy từ bộ thẻ |
 | `LLM_ONLY` | ~600 | Không thẻ nào khớp — trả lời kèm cảnh báo |
+
+Bảng trên chỉ nói về **lượt chat**. `POST /internal/v1/search` luôn 0 token, còn
+`POST /internal/v1/vocab/extract` thì ngược lại — luôn tốn token, không có nhánh rẻ nào, và
+là lời gọi đắt nhất service nhận (một lượt đặt chỗ tới 87% ngân sách một phút).
 
 Mục tiêu vận hành: **≥ 40% lượt chat rơi vào ba nhánh 0 token**. Dưới ngưỡng này nghĩa
 là đang trả tiền cho việc mà dữ liệu cục bộ làm được miễn phí — xem `GET /internal/v1/stats`.
@@ -296,7 +301,7 @@ uv run pytest -m live
 
 ```
 app/
-  api/v1/       chat · search · quiz · index · stats
+  api/v1/       chat · search · quiz · vocab · index · stats
   chat/         orchestrator 12 bước, semantic cache, câu trả lời mẫu
   core/         logging có cấu trúc, lỗi và mã lỗi
   embedding/    encoder ONNX, vector index trong RAM, dựng text để embed

@@ -25,11 +25,30 @@ from app.schemas.card import SourceCard
 # được Python coi là dấu xuống dòng, đủ sức làm hỏng công cụ đọc chính file này.
 _CONTROL_RE = re.compile(
     "[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f"  # điều khiển ASCII và C1
+    "\\u115f-\\u1160"  # Hangul filler: rộng bằng 0 mà không phải khoảng trắng
+    "\\u180e"  # Mongolian vowel separator
     "\\u200b-\\u200f"  # zero-width space, ZWNJ, ZWJ, LRM, RLM
     "\\u2028-\\u202e"  # ngắt dòng/đoạn, LRE, RLE, PDF, LRO, RLO
     "\\u2060-\\u2064"  # word joiner và các ký tự vô hình khác
-    "\\ufeff]"  # BOM
+    "\\u2066-\\u2069"  # LRI, RLI, FSI, PDI — xem chú thích bên dưới
+    "\\u3164"  # Hangul filler thứ hai
+    "\\ufe00-\\ufe0f"  # variation selector
+    "\\ufeff"  # BOM
+    "\\U000e0000-\\U000e007f]"  # khối tag: giấu nguyên chuỗi ASCII vô hình
 )
+
+# Vì sao bốn dải cuối được thêm vào sau, ghi lại để không ai rút gọn chúng đi:
+#
+# Bản đầu dừng ngay TRƯỚC U+2066-U+2069. Đó đúng là bốn ký tự "isolate" mà tấn
+# công Trojan Source dùng — Unicode 6.3 thêm chúng SAU nhóm override
+# U+202A-U+202E vốn đã bị chặn, nên chặn nhóm cũ mà quên nhóm mới là bỏ lọt đúng
+# bộ đang được dùng thật.
+#
+# Khối tag \U000E0000-\U000E007F còn thẳng thừng hơn: nó ánh xạ trọn bảng ASCII
+# thành ký tự KHÔNG hiển thị, tức nhét được nguyên một câu chỉ thị vào giữa văn
+# bản mà người đọc không nhìn thấy gì.
+#
+# Chặn ở đây có lợi cho cả `/chat` hôm nay, không riêng phần trích xuất từ vựng.
 
 
 def sanitize(text: str, max_chars: int) -> str:

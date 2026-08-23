@@ -3,7 +3,7 @@
 > **Đối tượng:** đội backend Java (Spring Boot).
 > **Bạn không cần đọc `SPEC.md`.** Tài liệu này tự chứa mọi thứ để tích hợp.
 >
-> **Trạng thái ngày 17/08/2026: M1 đến M7 đã xong và service đang chạy thật.** Mọi ví dụ
+> **Trạng thái ngày 23/08/2026: M1 đến M8 đã xong và service đang chạy thật.** Mọi ví dụ
 > request/response trong tài liệu này là **gọi thật vào service đang chạy**, không có ví dụ
 > nào viết tay. Chỗ nào là số đo thì có ghi rõ.
 >
@@ -117,6 +117,8 @@ quyết định danh sách ấy.**
 | Retrieval, phân loại intent | fsoft-ai |
 | Gọi LLM, quản ngân sách token | fsoft-ai |
 | Sinh câu hỏi quiz | fsoft-ai |
+| Trích từ vựng từ đoạn văn | fsoft-ai |
+| **Lưu thẻ vào deck sau khi người dùng chọn** | **Backend Java** |
 
 **Vì sao chia thế này:** logic phân quyền đã tồn tại trong Java. Viết lại bằng Python
 nghĩa là hai bản logic có thể lệch nhau — và khi lệch thì hậu quả là lộ bộ thẻ riêng tư
@@ -688,6 +690,92 @@ có từ 4 thẻ trở lên.
 cũng lùi về `MULTIPLE_CHOICE`. **Luôn đọc `type` của từng câu**, đừng giả định theo yêu cầu đã
 gửi. Đây là hành vi có chủ ý: thà ra đề dễ hơn còn hơn không ra được đề nào.
 
+### 5.6 `POST /internal/v1/vocab/extract`
+
+Người dùng dán một đoạn văn tiếng Anh, nhận về **thẻ từ vựng ứng viên** đã dựng sẵn đủ
+trường — đúng shape thẻ nên backend chỉ việc lưu những thẻ người dùng tick chọn.
+
+**fsoft-ai không lưu gì cả.** Nó không có endpoint ghi dữ liệu nghiệp vụ nào. Việc thẻ nào
+vào deck nào là quyết định của backend.
+
+```json
+{
+  "text": "The team stayed resilient after missing the first deadline.",
+  "allowed_deck_ids": [1, 2, 3, 4],
+  "max_candidates": 5
+}
+```
+
+Response thật (rút gọn còn một ứng viên, lần chạy trả về năm):
+
+```json
+{
+  "candidates": [
+    {
+      "word": "resilient",
+      "phonetic": "/rɪˈzɪliənt/",
+      "part_of_speech": "adj",
+      "meaning": "kiên cường, có khả năng phục hồi nhanh",
+      "definition_en": "able to recover quickly from difficulties",
+      "example_sentence": "The team stayed resilient after missing the first deadline.",
+      "example_meaning": "Cả nhóm vẫn kiên cường sau khi lỡ hạn chót đầu tiên.",
+      "already_in_deck": true,
+      "existing_card_id": 101
+    }
+  ],
+  "stats": {
+    "text_chars": 177, "distinct_english_tokens": 21, "returned_by_llm": 5,
+    "dropped_not_grounded": 0, "dropped_unsafe": 0, "already_in_deck_count": 2,
+    "dedup_checked": true, "llm_calls": 1,
+    "prompt_tokens": 821, "completion_tokens": 1433, "latency_ms": 5005
+  }
+}
+```
+
+**Bốn cái bẫy của endpoint này:**
+
+**1. Đây là endpoint ĐẮT NHẤT, và không có đường lùi 0 token.** Một lượt đặt chỗ tới **87%**
+ngân sách token mỗi phút của TOÀN hệ thống. Đo thật: mỗi từ xin thêm tốn ~350 token đầu ra,
+và phần lớn là **token suy luận ẩn** không hề xuất hiện trong câu trả lời.
+
+- Gọi **tuần tự**, đừng bắn song song. Service tự giới hạn một lượt tại một thời điểm.
+- Trong lúc một lượt đang chạy, `/chat` của người khác gần như chắc chắn nhận `429`.
+- **Đừng** gọi khi người dùng vừa dán xong. Chờ họ bấm nút.
+- Khác quiz, ở đây **không có** cờ kiểu `use_ai_context: false` để chạy miễn phí. Groq chết
+  là tính năng này chết theo.
+
+**2. `text` vượt 4.000 ký tự trả `400`, và là `{"error": {...}}` chứ không phải `{"detail": [...]}`.**
+Thông báo nêu cả độ dài thật lẫn giới hạn. Service **không tự cắt và không tự chia nhỏ** —
+chia nhỏ là việc của backend, có chủ ý. Cắt im lặng sẽ khiến người dùng mất phần cuối bài đọc
+mà không biết.
+
+Ngược lại, `max_candidates` ngoài khoảng 1–6 trả `422` với `{"detail": [...]}`. Hai hình dạng
+lỗi này khác nhau là cố ý — parser phải chịu được cả hai.
+
+**3. `already_in_deck` là đánh dấu, KHÔNG phải lọc.** Từ người học đã có **vẫn nằm trong kết
+quả**, chỉ mang thêm cờ và `existing_card_id`. Giao diện nên bỏ tick sẵn thay vì giấu đi.
+
+Cờ chỉ đúng TRONG `allowed_deck_ids`: cùng một từ, phạm vi hẹp lại thì cờ về `false` — đó là
+đúng, không phải lỗi. Và khớp theo `word` viết thường, **không có lemma hoá**: bộ thẻ có
+`emission` mà đoạn văn cho ra `emissions` thì vẫn báo chưa có.
+
+**Luôn kiểm `stats.dedup_checked`.** `false` nghĩa là chỉ mục đang rỗng nên mọi cờ đều vô
+nghĩa — xảy ra trong cửa sổ sau khi container khởi động lại mà đồng bộ đầu tiên chưa xong.
+
+**4. Mảng rỗng có hai nghĩa khác nhau, phân biệt bằng `stats.returned_by_llm`:**
+
+| `returned_by_llm` | `candidates` | HTTP | Nghĩa |
+|---|---|---|---|
+| `0` | `[]` | **200** | Đoạn văn thật sự không có từ nào đáng học. Đừng gọi lại |
+| `> 0` | `[]` | **503** | Model bịa toàn bộ, đã bị lọc sạch. Thử lại có cơ hội |
+
+> **Nội dung trả về là do người dùng gây ảnh hưởng được.** `word`, `meaning`,
+> `example_sentence` đi ra từ một LLM đọc văn bản người dùng tự dán. Service đã chặn ký tự
+> `< > { } [ ] \`, đường dẫn `http` và xuống dòng ở mọi trường, nhưng **frontend vẫn phải
+> escape khi render** — dùng Markdown renderer có `html: false` hoặc DOMPurify, và tuyệt đối
+> không `dangerouslySetInnerHTML` / `v-html` / `th:utext`. Thẻ lưu xong là chia sẻ được, nên
+> một payload lọt qua sẽ tấn công người khác chứ không phải người dán.
+
 ---
 
 ## 6. Định dạng lỗi
@@ -710,7 +798,7 @@ thứ để code rẽ nhánh.
 | Code | HTTP | Ý nghĩa | Backend nên làm gì |
 |---|---|---|---|
 | `INVALID_SCOPE` | 400 | `allowed_deck_ids` rỗng, hoặc `scope_deck_id` ngoài phạm vi | Bug phía backend. **Đừng retry**, sửa cách tính quyền |
-| `INVALID_REQUEST` | 400 | Tham số vô lý (deck không đủ 4 thẻ, giá trị ngoài khoảng) | **Đừng retry**, hiện `message` |
+| `INVALID_REQUEST` | 400 | Tham số vô lý (deck không đủ 4 thẻ, giá trị ngoài khoảng, `text` vượt 4.000 ký tự) | **Đừng retry**, hiện `message` |
 | `UNAUTHORIZED` | 401 | Sai hoặc thiếu `X-Internal-Token` | **Đừng retry**, kiểm lại TOKEN_A |
 | `BUDGET_EXHAUSTED` | 429 | Hết ngân sách token dùng chung | **Đọc `retry_after_seconds`**, trả `429` cho user kèm số đó |
 | `PROVIDER_UNAVAILABLE` | 503 | Nhà cung cấp LLM hỏng sau khi đã retry | Retry có backoff 2–3 lần. Trả `503` **message tiếng Việt**, không phải `500` |
@@ -733,6 +821,9 @@ khó debug nhất. Response thật khi gửi `allowed_deck_ids` là chuỗi thay
 `LLM_ONLY`. `POST /search` và `POST /quiz/generate` với `use_ai_context: false` vẫn hoạt động
 bình thường — **đừng cho cả tính năng AI "sập"** khi thấy một lỗi 503 từ `/chat`.
 
+Ngoại lệ duy nhất: `POST /vocab/extract` **chết theo LLM**, vì không cách nào tự chế nghĩa
+tiếng Việt của một từ mà không có model. Ẩn riêng nút đó đi, đừng ẩn cả tính năng.
+
 > Không bao giờ có traceback trong response. Nếu thấy traceback, đó là bug — báo đội AI.
 
 ---
@@ -751,6 +842,18 @@ trần. Hệ quả cho thiết kế backend:
 - Ưu tiên `use_ai_context: false` cho quiz, trừ khi người dùng chủ động xin đề khó.
 - Chuẩn bị sẵn giao diện cho `429`: "trợ lý đang bận, thử lại sau N giây", N lấy từ
   `retry_after_seconds`.
+
+**`POST /vocab/extract` là ngoại lệ đắt nhất.** Một lượt đặt chỗ tới **87%** ngân sách một
+phút — tức gần bằng bốn lượt chat cộng lại. Đo thật, không phải ước lượng:
+
+| | Token |
+|---|---|
+| Một lượt chat RAG | ~700–1.200 |
+| Một lượt `/vocab/extract` với `max_candidates=6` | **~5.500 đặt chỗ** |
+
+Phần lớn là token suy luận ẩn của model. Hệ quả: trong lúc một lượt trích xuất đang chạy,
+`/chat` của người khác gần như chắc chắn nhận `429`. Gọi tuần tự, và đừng để nó nằm trên
+đường đi nóng của giao diện.
 
 ### Render free: service **ngủ** sau 15 phút không có request
 

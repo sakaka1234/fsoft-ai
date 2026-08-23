@@ -484,6 +484,44 @@ async def test_ngan_sach_can_thi_khong_goi_nha_cung_cap(
     assert fake.call_count == 0
 
 
+async def test_hong_toan_phan_thi_nha_lai_cho_da_giu(
+    llm_settings: Settings, service: Service
+) -> None:
+    """
+    Mọi model, mọi lần thử đều hỏng thì chỗ đã đặt PHẢI được trả lại.
+
+    `settle()` chỉ chạy ở nhánh thành công, và nó là nơi duy nhất nhả lại phần
+    `reserve()` giữ trước. Thiếu bước trả lại này, một lời gọi HỎNG vẫn ghim
+    ngân sách y như một lời gọi thành công, trong khi nhà cung cấp không tính
+    tiền — nghĩa là chỉ cần vài request hỏng là khoá cả service một phút, miễn
+    phí cho người gửi. Với endpoint trích xuất từ vựng (đặt chỗ ~3.500 token)
+    thì hai request đã đủ.
+    """
+
+    fake = FakeGroq(lambda _: httpx2.Response(500, json={"error": {"message": "toang"}}))
+    budget = TokenBudget(12_000)
+    client = LlmClient(llm_settings, budget, service.usage_repo, http_client=fake.as_client())
+
+    with pytest.raises(ProviderUnavailable):
+        await client.complete(task="CHAT", system="s" * 300, user="u" * 300)
+
+    assert budget.snapshot()["used"] == 0, "chỗ đã giữ không được nhả lại sau khi hỏng"
+
+
+async def test_hong_mot_model_roi_thanh_cong_model_sau_chi_settle_mot_lan(
+    llm_settings: Settings, service: Service
+) -> None:
+    """Đối chứng: settle đúng một lần, không trừ hai lần thành số âm."""
+
+    fake = FakeGroq([rate_limited("0"), rate_limited("0"), rate_limited("0"), ok()])
+    budget = TokenBudget(12_000)
+    client = LlmClient(llm_settings, budget, service.usage_repo, http_client=fake.as_client())
+
+    await client.complete(task="CHAT", system="s" * 300, user="u" * 300)
+
+    assert budget.snapshot()["used"] > 0
+
+
 async def test_dong_bo_ngan_sach_tu_header(llm_settings: Settings, service: Service) -> None:
     fake = FakeGroq([ok(**{"x-ratelimit-remaining-tokens": "3000"})])
     budget = TokenBudget(12_000)

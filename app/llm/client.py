@@ -145,31 +145,56 @@ class LlmClient:
 
         last_error: Exception | None = None
 
-        for candidate in attempt_models:
-            try:
-                return await self._call_with_retry(
-                    task=task,
-                    model=candidate,
-                    messages=messages,
-                    max_tokens=max_tokens or self._settings.ai_max_output_tokens,
-                    temperature=(
-                        temperature if temperature is not None else self._settings.ai_temperature
-                    ),
-                    json_mode=json_mode,
-                    estimated=estimated,
-                    intent=intent,
-                    answer_source=answer_source,
-                )
+        # `_call_with_retry` gọi `settle()` NGAY TRƯỚC khi trả về, và đó là chỗ
+        # duy nhất nhả lại chỗ đã giữ ở `reserve()` phía trên. Nếu mọi model và
+        # mọi lần thử đều hỏng thì không ai settle, và `estimated` token nằm lại
+        # trong cửa sổ một phút cho tới khi hết phút.
+        #
+        # Hậu quả không nhỏ: một lời gọi HỎNG vẫn ghim ngân sách y như một lời
+        # gọi thành công, mà nhà cung cấp không hề tính tiền. Với endpoint trích
+        # xuất từ vựng (đặt chỗ ~3.500 token) thì hai request hỏng liên tiếp là
+        # đủ khoá `/chat` của mọi người suốt một phút — miễn phí cho kẻ gửi.
+        #
+        # `stream()` không dính vì nó đã settle trong `finally`.
+        da_settle = False
 
-            except openai.RateLimitError as exc:
-                last_error = exc
+        try:
+            for candidate in attempt_models:
+                try:
+                    ket_qua = await self._call_with_retry(
+                        task=task,
+                        model=candidate,
+                        messages=messages,
+                        max_tokens=max_tokens or self._settings.ai_max_output_tokens,
+                        temperature=(
+                            temperature
+                            if temperature is not None
+                            else self._settings.ai_temperature
+                        ),
+                        json_mode=json_mode,
+                        estimated=estimated,
+                        intent=intent,
+                        answer_source=answer_source,
+                    )
 
-                log.warning("llm_downgrade", from_model=candidate, to_model=fallback)
+                    da_settle = True
 
-            except openai.APIError as exc:
-                last_error = exc
+                    return ket_qua
 
-                log.warning("llm_provider_error", model=candidate, error=str(exc))
+                except openai.RateLimitError as exc:
+                    last_error = exc
+
+                    log.warning("llm_downgrade", from_model=candidate, to_model=fallback)
+
+                except openai.APIError as exc:
+                    last_error = exc
+
+                    log.warning("llm_provider_error", model=candidate, error=str(exc))
+
+        finally:
+            if not da_settle:
+                # actual=0: không tốn token thật nào, trả nguyên chỗ đã giữ.
+                self._budget.settle(estimated, 0)
 
         log.error("llm_unavailable", error=str(last_error))
 

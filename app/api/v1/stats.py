@@ -82,7 +82,7 @@ STATS_EXAMPLES: dict = {
             "prompt_tokens": 41200,
             "completion_tokens": 12800,
             "total_tokens": 54000,
-            "by_task": {"CHAT": 96, "REWRITE": 28, "QUIZ": 13},
+            "by_task": {"CHAT": 96, "REWRITE": 28, "QUIZ": 13, "VOCAB_EXTRACT": 4},
             "by_answer_source": {
                 "DIRECT_LOOKUP": 31,
                 "CACHE": 12,
@@ -130,7 +130,7 @@ STATS_EXAMPLES: dict = {
             "prompt_tokens": 128000,
             "completion_tokens": 41200,
             "total_tokens": 169200,
-            "by_task": {"CHAT": 120, "REWRITE": 40, "QUIZ": 8},
+            "by_task": {"CHAT": 120, "REWRITE": 40, "QUIZ": 8, "VOCAB_EXTRACT": 9},
             "by_answer_source": {
                 "DIRECT_LOOKUP": 9,
                 "CACHE": 4,
@@ -252,9 +252,15 @@ dùng `ok` thay vì tự so, so nhầm chiều là lỗi im lặng.
 
 ### Vài điều dễ hiểu nhầm khác
 
-- `by_answer_source` **chỉ đếm dòng `task=CHAT`**. `REWRITE` và `QUIZ` không có khái
-  niệm nguồn câu trả lời nên không xuất hiện ở đây — tổng các giá trị khớp
-  `chat_turns`, không khớp `calls`.
+- `by_answer_source` **chỉ đếm dòng `task=CHAT`**. `REWRITE`, `QUIZ` và
+  `VOCAB_EXTRACT` không có khái niệm nguồn câu trả lời nên không xuất hiện ở đây —
+  tổng các giá trị khớp `chat_turns`, không khớp `calls`.
+- `VOCAB_EXTRACT` làm lệch các chỉ số một cách BẤT ĐỐI XỨNG, và biết trước thì
+  đỡ hoảng: nó cộng vào `calls` và `total_tokens`, nên **pha loãng `error_rate`**
+  (mẫu số là `calls`); nhưng nó KHÔNG cộng vào `chat_turns`, nên `free_ratio` và
+  `avg_tokens_per_chat` không hề đổi. Một ngày nhiều lượt trích xuất sẽ thấy
+  `total_tokens` vọt lên trong khi `avg_tokens_per_chat` đứng yên — đó là đúng,
+  không phải hỏng.
 - `by_answer_source` chỉ có **đúng bốn khoá**: `DIRECT_LOOKUP`, `CACHE`, `CANNED`,
   `RAG`. **`LLM_ONLY` không bao giờ xuất hiện ở đây**, dù nó là một `answer_source`
   hợp lệ trong phản hồi chat: lúc ghi nhật ký, service chưa biết câu trả lời sẽ có

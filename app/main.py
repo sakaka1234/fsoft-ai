@@ -22,6 +22,7 @@ from app.api.v1 import index as index_api
 from app.api.v1 import quiz as quiz_api
 from app.api.v1 import search as search_api
 from app.api.v1 import stats as stats_api
+from app.api.v1 import vocab as vocab_api
 from app.chat.orchestrator import ChatOrchestrator
 from app.chat.semantic_cache import SemanticCache
 from app.config import Settings, get_settings, resolve_path
@@ -48,6 +49,7 @@ from app.sync.fixture_source import FixtureCardSource
 from app.sync.http_source import HttpCardSource
 from app.sync.source import CardSource
 from app.sync.syncer import Syncer
+from app.vocab.extractor import VocabExtractor
 
 log = get_logger(__name__)
 
@@ -91,7 +93,8 @@ truyền vào.
 - Danh sách **rỗng** nghĩa là **không được phép gì cả** → `400`.
   Tuyệt đối không hiểu thành "không lọc".
 - Thẻ ngoài danh sách sẽ không bao giờ xuất hiện, kể cả trong trích dẫn của câu
-  trả lời hay trong đáp án nhiễu của quiz.
+  trả lời, trong đáp án nhiễu của quiz, hay trong cờ `already_in_deck` /
+  `existing_card_id` của `/vocab/extract`.
 
 ---
 
@@ -115,6 +118,10 @@ hơn. Ngưỡng cần giữ là **trung bình < 1.200 token mỗi lượt chat**
 `GET /internal/v1/stats`.
 
 `POST /search` và quiz với `use_ai_context=false` **luôn** 0 token.
+
+`POST /vocab/extract` thì ngược lại: **luôn** tốn token, không có nhánh rẻ nào,
+và là lời gọi đắt nhất service nhận — một lượt đặt chỗ tới ~5.500 trên ngân
+sách 6.400 token mỗi phút. Gọi tuần tự, đừng bắn song song.
 
 ---
 
@@ -174,6 +181,14 @@ OPENAPI_TAGS = [
         "name": "Internal - Quiz",
         "description": (
             "Sinh câu hỏi ôn tập. Ba trong bốn dạng dựng thẳng từ dữ liệu thẻ, không chạm LLM."
+        ),
+    },
+    {
+        "name": "Internal - Từ vựng",
+        "description": (
+            "Trích thẻ từ vựng từ một đoạn văn người dùng dán vào. **Luôn tốn "
+            "token** và không có đường lùi 0 token — đây là endpoint đắt nhất ở "
+            "đây. Service trả về ứng viên, backend mới là bên lưu."
         ),
     },
     {
@@ -245,6 +260,7 @@ class Service:
     cache: SemanticCache
     orchestrator: ChatOrchestrator
     quiz: QuizGenerator
+    vocab: VocabExtractor
 
     encoder_ready: bool = False
     index_ready: bool = False
@@ -337,6 +353,7 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
             usage_repo=usage_repo,
         ),
         quiz=QuizGenerator(settings=settings, index=index, llm=llm, prompts=prompts),
+        vocab=VocabExtractor(settings=settings, index=index, llm=llm, prompts=prompts),
     )
 
 
@@ -470,6 +487,7 @@ def create_app(settings: Settings | None = None, encoder: Encoder | None = None)
     app.include_router(chat_api.router)
     app.include_router(quiz_api.router)
     app.include_router(stats_api.router)
+    app.include_router(vocab_api.router)
 
     @app.get(
         "/healthz",

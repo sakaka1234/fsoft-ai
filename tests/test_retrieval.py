@@ -264,3 +264,32 @@ def test_bm25_khong_de_hu_tu_quyet_dinh_thu_hang() -> None:
 
     # Và "từ" vẫn nằm nguyên trong corpus, nên hỏi thẳng "từ chức" vẫn ra.
     assert 18 in [cid for cid, _ in index.lexical_search("từ chức", decks, top_k=5)]
+
+
+def test_sanitize_nuot_ky_tu_vo_hinh_dung_de_giau_chi_thi() -> None:
+    """
+    Bốn dải được thêm vào `_CONTROL_RE` sau, mỗi dải là một cách giấu chỉ thị
+    trong văn bản mà mắt người không thấy.
+
+    Dải quan trọng nhất là U+2066-U+2069: bản đầu dừng ngay TRƯỚC chúng. Đó đúng
+    là bốn ký tự "isolate" mà tấn công Trojan Source dùng — Unicode 6.3 thêm
+    chúng SAU nhóm override đã bị chặn, nên chặn nhóm cũ mà quên nhóm mới là bỏ
+    lọt đúng bộ đang được dùng thật.
+    """
+
+    from app.retrieval.context import sanitize
+
+    ca = [
+        ("LRI", "\u2066"),
+        ("PDI", "\u2069"),
+        ("khối tag", "\U000e0001"),
+        ("variation selector", "\ufe0f"),
+        ("Hangul filler", "\u3164"),
+        ("Mongolian vowel separator", "\u180e"),
+    ]
+
+    for ten, ky_tu in ca:
+        assert sanitize(f"a{ky_tu}b", 50) == "a b", f"{ten} vẫn lọt qua"
+
+    # Đối chứng: chữ tiếng Việt có dấu KHÔNG được đụng tới.
+    assert sanitize("kiên cường", 50) == "kiên cường"
