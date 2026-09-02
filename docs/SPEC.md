@@ -743,7 +743,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
 -- Nhật ký gọi LLM
 CREATE TABLE IF NOT EXISTS usage_log (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    task              TEXT    NOT NULL,   -- CHAT | REWRITE | QUIZ | VOCAB_EXTRACT | VOCAB_GENERATE | EMBED
+    task              TEXT    NOT NULL,   -- CHAT | REWRITE | QUIZ | VOCAB_* | EMBED
     provider          TEXT    NOT NULL,
     model             TEXT    NOT NULL,
     answer_source     TEXT,
@@ -1190,6 +1190,121 @@ của client.
 nghĩa là model từ chối, chạm bộ lọc an toàn, hoặc trả rác — trả 200 rỗng là nói
 dối.
 
+### 8.5d `POST /internal/v1/vocab/lookup`
+
+Tra **đúng một từ**, trả về thẻ từ vựng dựng sẵn đủ trường. Hai ca dùng chung
+một endpoint: người dùng bấm nút tra trong lúc soạn thẻ, và người dùng **bôi
+đen một từ** trong lúc đọc — ca thứ hai gửi kèm `context` để chọn đúng nghĩa.
+
+```json
+{
+  "word": "bank",
+  "context": "They sat on the river bank and watched the boats go by.",
+  "allowed_deck_ids": [1, 2, 3, 4]
+}
+```
+
+| Tham số | Bắt buộc | Ghi chú |
+|---|---|---|
+| `word` | có | Tối đa 64 ký tự; chuẩn hoá xong phải là một từ hoặc cụm ≤ 3 từ |
+| `context` | không | Tối đa 300 ký tự. Vượt thì **cắt**, không báo lỗi |
+| `allowed_deck_ids` | có | Rỗng → `400 INVALID_SCOPE`. Chỉ dùng để kiểm "đã có chưa" |
+
+```json
+{
+  "source": "AI",
+  "found": true,
+  "suggestion": null,
+  "card": {
+    "word": "bank", "phonetic": "/bæŋk/", "part_of_speech": "noun",
+    "meaning": "bờ sông", "definition_en": "the land alongside a river",
+    "example_sentence": "We picnicked on the grassy bank all afternoon.",
+    "example_meaning": "Chúng tôi dã ngoại trên bờ cỏ suốt buổi chiều.",
+    "already_in_deck": false, "existing_card_id": null
+  },
+  "stats": {
+    "source": "AI", "word_chars": 4, "context_chars": 55, "llm_calls": 1,
+    "cache_size": 137, "prompt_tokens": 978, "completion_tokens": 611,
+    "latency_ms": 1780
+  }
+}
+```
+
+#### Ràng buộc chi phối endpoint này khác hẳn 8.5b và 8.5c
+
+`extract` và `generate` là việc người dùng cố ý làm rồi ngồi chờ. Đây là một
+**nút bấm**, và bấm nhầm cũng bấm — nó sẽ được gọi nhiều hơn hai cái kia rất
+nhiều. Trên ngân sách 6.400 token mỗi phút cho toàn hệ thống, nếu mỗi lượt bấm
+đều gọi LLM thì cả ứng dụng chỉ chịu được chừng **ba lượt bấm một phút**.
+
+Vì vậy có **ba đường**, và hai đường đầu là thứ làm cái nút này khả thi:
+
+| `source` | Token | Khi nào |
+|---|---|---|
+| `YOUR_DECK` | **0** | Từ đã có trong `allowed_deck_ids` — trả nội dung thẻ thật của người dùng |
+| `CACHE` | **0** | Đã có người tra từ này, cùng ngữ cảnh, trong vòng một tuần |
+| `AI` | ~2.400 đặt chỗ | Hai đường trên đều trượt |
+
+Cộng thêm một điều kiện ngoài service: **backend chỉ gọi tới đây sau khi từ điển
+của chính backend đã trượt** (mục 5.8 của tài liệu tích hợp). Đây là đường lùi,
+không phải đường chính.
+
+`YOUR_DECK` là câu trả lời đáng giá nhất, và không phải vì miễn phí: người dùng
+đang ở màn hình **soạn thẻ mới**, nên biết mình sắp tạo thẻ trùng còn hữu ích
+hơn một thẻ mới.
+
+#### Cache dùng chung toàn cục — vì sao ở đây an toàn mà ở `/chat` thì không
+
+`SemanticCache` của `/chat` **bắt buộc** khoá theo phạm vi deck; thiếu là lỗ
+hổng bảo mật, vì câu trả lời của `/chat` được dựng TỪ THẺ của người dùng.
+
+Ở đây ngược lại: nghĩa của từ `donut` không phụ thuộc bộ thẻ của ai cả. Không có
+gì để rò rỉ, nên cache dùng chung toàn cục là an toàn — và đó chính là chỗ nó có
+giá trị: một người tra rồi thì mọi người sau đều miễn phí.
+
+Điều kiện để "an toàn" đó đúng: **hai cờ `already_in_deck` và `existing_card_id`
+tuyệt đối không được lưu vào cache**, vì chúng phụ thuộc phạm vi của từng người.
+Chúng được gắn lại sau khi đọc cache, và có test khoá.
+
+Ngữ cảnh nằm trong khoá cache: `bank` trong câu về dòng sông và `bank` trong câu
+về tiền là hai mục khác nhau.
+
+#### `found: false` là câu trả lời 200 hợp lệ
+
+Người dùng gõ sai chính tả là chuyện thường xuyên, không phải sự cố:
+
+```json
+{ "source": "AI", "found": false, "suggestion": "receive", "card": null, ... }
+```
+
+Câu hỏi vẫn đã được trả lời — câu trả lời là "không có từ này". Trả 503 ở đây là
+nói dối về nguyên nhân.
+
+Service **không kiểm chứng được** cờ đó: repo không có từ điển tiếng Anh nào (và
+`scripts/tia_vocab.py` sinh ra vocab **BPE subword**, không dùng làm danh sách từ
+được). Nó là lời của model. Nhưng hỏi thẳng vẫn tốt hơn hẳn để model bịa một
+nghĩa nghe rất thật cho một từ không tồn tại, rồi người học lưu vào bộ thẻ và học
+thuộc nó.
+
+Số đo cho thấy nhánh này còn **rẻ nhất** trong tất cả (173-560 token completion
+so với 735 của nhánh đầy đủ): model quyết định "không có từ này" nhanh hơn nhiều
+so với soạn một thẻ hoàn chỉnh.
+
+#### Ba chỗ cố ý khác 8.5c
+
+1. **Không dùng chung hàng đợi** với `extract`/`generate`. Xếp một cái nút bấm
+   sau một lượt trích xuất 5 giây là làm nó trông như bị treo. `TokenBudget` một
+   mình là đủ: quá tải thì trả `429` ngay kèm `retry_after_seconds`, và với thao
+   tác tương tác thì một lỗi nhanh tốt hơn một lần chờ dài.
+2. **`context` quá dài thì CẮT**, không phải `400`. Ở `generate`, `topic` là
+   toàn bộ yêu cầu nên cắt đi là đổi ý người dùng; ở đây ngữ cảnh chỉ để chọn
+   nghĩa, mất phần đuôi vẫn dùng được.
+3. **`card.word` có thể khác chuỗi gửi lên.** Gửi `Donuts`, nhận `donut` — thẻ
+   từ vựng cần dạng từ điển. Service kiểm rằng hai dạng vẫn là **cùng một từ**;
+   model trả về một từ khác hẳn thì lượt đó bị loại (`503`), vì nếu không thì
+   người dùng gõ `donut` lại nhận về thẻ hoàn chỉnh của một từ khác, trông
+   hoàn toàn hợp lệ.
+
 ### 8.6 Định dạng lỗi
 
 ```json
@@ -1229,6 +1344,7 @@ fsoft-ai/
 │   ├── m0_groq.py                 # ĐÃ CÓ — chạy ở M0
 │   ├── download_model.py          # nạp model vào cache lúc build image
 │   ├── do_sinh_theo_chu_de.py     # ★ M9, đo token thật, bảng kết quả trong docstring
+│   ├── do_tra_tu.py               # ★ M10, như trên, cho endpoint tra từ
 │   └── run_eval.py
 ├── docs/
 │   ├── SPEC.md                    # tài liệu này
@@ -1281,7 +1397,9 @@ fsoft-ai/
 │   │       ├── quiz_fill_blank_v1.txt
 │   │       ├── vocab_extract_v1.txt
 │   │       ├── vocab_generate_system_v1.txt
-│   │       └── vocab_generate_user_v1.txt
+│   │       ├── vocab_generate_user_v1.txt
+│   │       ├── vocab_lookup_system_v1.txt
+│   │       └── vocab_lookup_user_v1.txt
 │   ├── chat/
 │   │   ├── orchestrator.py        # luồng 12 bước ở mục 11.5
 │   │   ├── direct_answer.py       # trả lời template, 0 token
@@ -1297,7 +1415,9 @@ fsoft-ai/
 │   │   ├── grounding.py           # ★ M8, hàm thuần: câu ví dụ có bám text không
 │   │   ├── generator.py           # ★ M9, sinh theo chủ đề, danh sách tránh
 │   │   ├── guard.py               # ★ M9, hàm thuần: chốt chặn cho thẻ model tự bịa
-│   │   └── dedup.py               # ★ M9, đánh dấu trùng, dùng chung hai endpoint
+│   │   ├── dedup.py               # ★ M9, đánh dấu trùng, dùng chung ba endpoint
+│   │   ├── lookup.py              # ★ M10, tra một từ, hai đường 0 token
+│   │   └── word_cache.py          # ★ M10, cache khớp chuỗi, dùng chung toàn cục
 │   └── schemas/
 │       ├── card.py
 │       ├── chat.py
@@ -1321,6 +1441,7 @@ fsoft-ai/
     ├── test_quiz.py
     ├── test_vocab.py
     ├── test_vocab_generate.py
+    ├── test_vocab_lookup.py
     ├── test_config.py
     ├── test_stats.py
     └── test_security.py
@@ -1885,6 +2006,48 @@ Endpoint `POST /internal/v1/vocab/generate`, đặc tả ở [mục 8.5c](#85c-p
       định: một cho ngưỡng thảm hoạ, một cho ngưỡng thiết kế
 - [ ] Hai endpoint `/vocab/*` trỏ về **cùng một** `$ref` `VocabCandidate` trong
       `/openapi.json`
+
+---
+
+### 11.11 M10 — Tra một từ, kèm câu ví dụ
+
+> **Ngoài backlog Sprint 2**, giống M8 và M9.
+
+Endpoint `POST /internal/v1/vocab/lookup`, đặc tả ở [mục 8.5d](#85d-post-internalv1vocablookup).
+
+**Acceptance:**
+
+- [ ] Chuỗi không thể là một từ (`"123"`, `"a.b.c"`, bốn từ trở lên, rỗng) →
+      `400 INVALID_REQUEST`, và **không tốn một token nào**
+- [ ] `word` dài hơn 64 ký tự → `400`, thông báo nêu **cả** độ dài thật lẫn giới hạn
+- [ ] `allowed_deck_ids: []` → `400 INVALID_SCOPE`
+- [ ] Từ **sai chính tả** (`recieve`) **KHÔNG** bị chặn ở 400 — nó phải đi tiếp
+      tới LLM để nhận gợi ý chính tả, thứ người dùng cần nhất lúc đó
+- [ ] `context` dài hơn 300 ký tự bị **cắt**, không phải `400` — cố ý khác `topic`
+      của 8.5c
+- [ ] Từ đã có trong `allowed_deck_ids` → `source: YOUR_DECK`, `llm_calls: 0`,
+      `card` là nội dung thẻ thật kèm `existing_card_id`
+- [ ] Cùng từ đó với phạm vi deck khác → `source: AI`, phải trả tiền như từ mới
+- [ ] Lượt gọi thứ hai cùng từ, cùng ngữ cảnh → `source: CACHE`, `llm_calls: 0`
+- [ ] Cùng từ với **hai ngữ cảnh khác nhau** → hai lượt gọi LLM khác nhau
+- [ ] **Cache không mang cờ khử trùng của người dùng nào.** Người thứ hai với
+      phạm vi deck khác không bao giờ nhận `existing_card_id` của người thứ nhất
+- [ ] Cache trả **bản sao**: sửa thẻ nhận được không làm hỏng mục trong cache
+- [ ] Cache đầy thì đuổi theo LRU
+- [ ] `found: false` → **200** với `card: null`, KHÔNG phải lỗi
+- [ ] `found: false` **không được đưa vào cache**
+- [ ] `suggestion` cũng là chữ model sinh ra, phải qua đúng chốt chặn như `word`
+- [ ] Model trả về **một từ khác hẳn** từ người dùng hỏi → `503`, không im lặng
+      đưa cho họ thẻ của từ khác
+- [ ] Dạng chia (`Donuts`) được quy về dạng từ điển (`donut`)
+- [ ] Trường chứa `=`, thẻ HTML, hay `meaning` không có dấu tiếng Việt → `503`
+- [ ] **Ngân sách cạn vẫn KHÔNG làm chết đường 0 token** — từ đã có trong bộ thẻ
+      thì không tốn gì, nên phải trả lời được kể cả khi hết hạn mức
+- [ ] `stats.llm_calls` không bao giờ lớn hơn 1
+- [ ] Lượt gọi đắt nhất đặt chỗ **≤ 40%** ngân sách một phút — chặt hơn hẳn hai
+      endpoint kia, vì đây là nút bấm chứ không phải thao tác người dùng ngồi chờ
+- [ ] **Không** dùng chung hàng đợi với `extract`/`generate`
+- [ ] Cả **ba** endpoint `/vocab/*` trỏ về cùng một `$ref` `VocabCandidate`
 
 ---
 

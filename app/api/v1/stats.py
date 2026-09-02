@@ -88,6 +88,7 @@ STATS_EXAMPLES: dict = {
                 "QUIZ": 13,
                 "VOCAB_EXTRACT": 4,
                 "VOCAB_GENERATE": 7,
+                "VOCAB_LOOKUP": 31,
             },
             "by_answer_source": {
                 "DIRECT_LOOKUP": 31,
@@ -142,6 +143,7 @@ STATS_EXAMPLES: dict = {
                 "QUIZ": 8,
                 "VOCAB_EXTRACT": 9,
                 "VOCAB_GENERATE": 15,
+                "VOCAB_LOOKUP": 62,
             },
             "by_answer_source": {
                 "DIRECT_LOOKUP": 9,
@@ -267,7 +269,7 @@ dùng `ok` thay vì tự so, so nhầm chiều là lỗi im lặng.
 - `by_answer_source` **chỉ đếm dòng `task=CHAT`**. `REWRITE`, `QUIZ` và hai
   task `VOCAB_*` không có khái niệm nguồn câu trả lời nên không xuất hiện ở đây —
   tổng các giá trị khớp `chat_turns`, không khớp `calls`.
-- Hai task `VOCAB_*` làm lệch các chỉ số một cách BẤT ĐỐI XỨNG, và biết trước thì
+- Ba task `VOCAB_*` làm lệch các chỉ số một cách BẤT ĐỐI XỨNG, và biết trước thì
   đỡ hoảng: nó cộng vào `calls` và `total_tokens`, nên **pha loãng `error_rate`**
   (mẫu số là `calls`); nhưng nó KHÔNG cộng vào `chat_turns`, nên `free_ratio` và
   `avg_tokens_per_chat` không hề đổi. Một ngày nhiều lượt trích xuất hay sinh thẻ sẽ thấy

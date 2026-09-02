@@ -1,15 +1,17 @@
 """
-Schema cho `/internal/v1/vocab/extract` (SPEC muc 8.5b) và `/vocab/generate`
-(SPEC muc 8.5c).
+Schema cho ba endpoint từ vựng:
 
-Hai endpoint dùng CHUNG một `VocabCandidate`. Đó là chủ ý: backend đã bind vào
-shape thẻ ấy từ M8, tách ra thành hai lớp giống hệt nhau chỉ đẻ thêm một type
-Java, một Jackson binding và một mapper, đổi lại con số không.
+  - `/internal/v1/vocab/extract`   dán một đoạn văn      SPEC muc 8.5b
+  - `/internal/v1/vocab/generate`  gõ một chủ đề         SPEC muc 8.5c
+  - `/internal/v1/vocab/lookup`    tra đúng một từ       SPEC muc 8.5d
 
-Chúng khác nhau đúng một điều, và điều đó KHÔNG nằm ở hình dạng thẻ mà nằm ở
-XUẤT XỨ của `example_sentence`: `extract` bảo đảm câu ấy có thật trong văn bản
-người dùng dán vào, `generate` thì không có văn bản nào để bảo đảm. Xem mô tả
-của chính trường đó.
+Cả ba dùng CHUNG một `VocabCandidate`. Đó là chủ ý: backend đã bind vào shape
+thẻ ấy từ M8, tách ra thành ba lớp giống hệt nhau chỉ đẻ thêm ba type Java, ba
+Jackson binding và ba mapper, đổi lại con số không.
+
+Chúng khác nhau ở XUẤT XỨ của `example_sentence`, không khác ở hình dạng thẻ:
+`extract` bảo đảm câu ấy có thật trong văn bản người dùng dán vào; `generate` và
+`lookup` thì không có văn bản nào để bảo đảm. Xem mô tả của chính trường đó.
 
 Quy tắc viết mô tả ở đây giống mọi file schema khác: nói HẬU QUẢ CỦA VIỆC HIỂU
 SAI, đừng nói lại tên trường. Viết "trường này là id của deck" thì không cứu
@@ -135,13 +137,15 @@ class VocabCandidate(BaseModel):
             "hoa thường); không khớp thì **cả ứng viên bị loại**. Đây là trường duy "
             "nhất LLM có thể dùng để đưa nội dung mới vào dữ liệu lưu trữ, nên bắt "
             "buộc nó có sẵn trong văn bản chính là cách đóng đường đó lại.\n\n"
-            "`/vocab/generate` — **không có văn bản nguồn nào để so khớp.** Câu do "
-            "model tự viết. Service chỉ kiểm được hình dạng: độ dài, bộ ký tự, và "
-            "việc câu có thật sự chứa chính từ đó. Không có phép kiểm nào nói được "
-            "câu ấy đúng ngữ pháp hay đúng nghĩa.\n\n"
+            "`/vocab/generate` và `/vocab/lookup` — **không có văn bản nguồn nào để "
+            "so khớp.** Câu do model tự viết. Service chỉ kiểm được hình dạng: độ "
+            "dài, bộ ký tự, và việc câu có thật sự chứa chính từ đó. Không có phép "
+            "kiểm nào nói được câu ấy đúng ngữ pháp hay đúng nghĩa.\n\n"
+            "Ngoại lệ duy nhất: `/vocab/lookup` với `source: YOUR_DECK` trả về nội "
+            "dung **thẻ có thật của người dùng**, không phải chữ model sinh ra.\n\n"
             "Cờ phân biệt máy đọc được là **`stats.dropped_not_grounded`**: có ở "
-            "`extract`, KHÔNG có ở `generate`. Backend nào cần rẽ nhánh theo xuất xứ "
-            "thì rẽ theo trường đó, đừng rẽ theo URL đã gọi."
+            "`extract`, KHÔNG có ở hai endpoint kia. Backend nào cần rẽ nhánh theo "
+            "xuất xứ thì rẽ theo trường đó, đừng rẽ theo URL đã gọi."
         ),
         examples=["The team stayed resilient after missing the first deadline."],
     )
@@ -642,3 +646,161 @@ class VocabGenerateResponse(BaseModel):
         )
     )
     stats: VocabGenerateStats
+
+
+# ---------------------------------------------------------------
+# M10 — POST /internal/v1/vocab/lookup
+# ---------------------------------------------------------------
+
+VI_DU_VOCAB_LOOKUP: dict = {
+    "tu_moi": {
+        "summary": "Từ mới — đi đường AI",
+        "description": (
+            "`donut` không có trong bộ thẻ mẫu nên đi đường `AI`. Đây là ca hay gặp "
+            "nhất khi người dùng bấm nút tra lúc soạn thẻ."
+        ),
+        "value": {"word": "donut", "allowed_deck_ids": [1, 2, 3, 4]},
+    },
+    "tu_da_co": {
+        "summary": "Từ đã có trong bộ thẻ — 0 token",
+        "description": (
+            "`resilient` là thẻ 101 của bộ thẻ mẫu. Trả về `source: YOUR_DECK`, "
+            "**không gọi LLM**, và cảnh báo luôn là người dùng sắp tạo thẻ trùng."
+        ),
+        "value": {"word": "resilient", "allowed_deck_ids": [1, 2, 3, 4]},
+    },
+    "boi_den_co_ngu_canh": {
+        "summary": "Bôi đen một từ trong câu — có ngữ cảnh",
+        "description": (
+            "`context` là câu người dùng đang đọc. Nó quyết định lấy nghĩa nào của "
+            "một từ nhiều nghĩa: `bank` ở đây là bờ sông, không phải ngân hàng."
+        ),
+        "value": {
+            "word": "bank",
+            "context": "They sat on the river bank and watched the boats go by.",
+            "allowed_deck_ids": [1, 2, 3, 4],
+        },
+    },
+    "go_sai_chinh_ta": {
+        "summary": "Gõ sai chính tả — found: false kèm gợi ý",
+        "description": (
+            "Trả **200** với `found: false`, `card: null`, và `suggestion` là từ "
+            "đúng nếu đoán được. KHÔNG bịa nghĩa cho một từ không tồn tại."
+        ),
+        "value": {"word": "recieve", "allowed_deck_ids": [1, 2, 3, 4]},
+    },
+}
+
+
+class VocabLookupRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [vi_du["value"] for vi_du in VI_DU_VOCAB_LOOKUP.values()]}
+    )
+
+    word: str = Field(
+        description=(
+            "Từ cần tra. Tối đa **64 ký tự**, và sau khi chuẩn hoá phải là một từ "
+            "hoặc cụm nhiều nhất ba từ, chỉ chữ cái a-z (cho phép dấu nối và dấu "
+            "nháy đơn ở giữa).\n\n"
+            'Service tự chuẩn hoá trước khi tra: `"Donuts "` thành `"donuts"`, và '
+            'model được yêu cầu trả về dạng từ điển `"donut"`. Vì vậy `card.word` '
+            "**có thể khác** chuỗi bạn gửi lên — đó là chủ ý, thẻ từ vựng cần dạng gốc.\n\n"
+            "Chuỗi không thể là một từ (có chữ số, dấu chấm, quá bốn từ) trả "
+            "**400 `INVALID_REQUEST`** mà **không tốn token nào**."
+        ),
+        examples=["donut"],
+    )
+    context: str = Field(
+        default="",
+        description=(
+            "Câu chứa từ đó, khi người dùng bôi đen một từ trong lúc đọc. Tối đa "
+            "**300 ký tự**, vượt thì bị cắt chứ không báo lỗi — ngữ cảnh là thứ "
+            "phụ trợ, cắt bớt vẫn dùng được, khác `word` là thứ bắt buộc.\n\n"
+            "Có ngữ cảnh thì model chọn nghĩa hợp với câu đó: `bank` trong câu về "
+            "dòng sông ra `bờ sông`, trong câu về tiền ra `ngân hàng`. Bỏ trống thì "
+            "model lấy nghĩa thông dụng nhất.\n\n"
+            "**Ngữ cảnh nằm trong khoá cache**, nên cùng một từ với hai câu khác "
+            "nhau là hai lượt gọi khác nhau."
+        ),
+        examples=["They sat on the river bank and watched the boats go by."],
+    )
+    allowed_deck_ids: list[int] = Field(
+        description=(
+            "Phạm vi bộ thẻ. Rỗng → **400 `INVALID_SCOPE`**.\n\n"
+            "Ở đây nó dùng cho một việc duy nhất: kiểm xem người dùng **đã có** từ "
+            "này chưa. Có rồi thì trả thẳng nội dung thẻ đó, `source: YOUR_DECK`, "
+            "**0 token** — và giao diện nên báo ngay là họ sắp tạo thẻ trùng."
+        ),
+        examples=[[1, 2, 3, 4]],
+    )
+
+
+class VocabLookupStats(BaseModel):
+    source: Literal["YOUR_DECK", "CACHE", "AI"] = Field(
+        description=(
+            "Câu trả lời này đến từ đâu.\n\n"
+            "| | Token | Nghĩa |\n"
+            "|---|---|---|\n"
+            "| `YOUR_DECK` | **0** | Từ đã có trong `allowed_deck_ids`, trả nội dung thẻ đó |\n"
+            "| `CACHE` | **0** | Đã có người tra từ này (cùng ngữ cảnh) gần đây |\n"
+            "| `AI` | ~2.000 | Gọi LLM thật |\n\n"
+            "Theo dõi tỉ lệ `AI` để biết nút tra có đang đốt ngân sách không."
+        ),
+        examples=["AI"],
+    )
+    word_chars: int = Field(examples=[5])
+    context_chars: int = Field(examples=[0])
+    llm_calls: int = Field(
+        description="`0` với `YOUR_DECK` và `CACHE`, `1` với `AI`. Không bao giờ lớn hơn 1.",
+        examples=[1],
+    )
+    cache_size: int = Field(
+        description="Số mục đang nằm trong cache tra từ. Trần 2.000, đuổi theo LRU.",
+        examples=[137],
+    )
+    prompt_tokens: int = Field(examples=[512])
+    completion_tokens: int = Field(examples=[734])
+    latency_ms: int = Field(examples=[1840])
+
+
+class VocabLookupResponse(BaseModel):
+    source: Literal["YOUR_DECK", "CACHE", "AI"] = Field(
+        description="Lặp lại `stats.source` ở tầng ngoài cho giao diện tiện đọc.",
+        examples=["AI"],
+    )
+    found: bool = Field(
+        description=(
+            "`false` nghĩa là **đây không phải một từ tiếng Anh có thật**, và khi đó "
+            "`card` là `null`.\n\n"
+            "Vẫn là **200**, không phải lỗi: câu hỏi đã được trả lời, câu trả lời là "
+            '"không có từ này". Giao diện nên hiện đúng như vậy rồi để người dùng '
+            "tự điền, thay vì đưa cho họ một thẻ trông hợp lệ cho một từ không tồn tại.\n\n"
+            "Service **không kiểm chứng được** cờ này — repo không có từ điển tiếng "
+            "Anh. Nó là lời của model. Nhưng hỏi thẳng vẫn tốt hơn nhiều so với để "
+            "model tự bịa một nghĩa nghe rất thật."
+        ),
+        examples=[True],
+    )
+    suggestion: str | None = Field(
+        default=None,
+        description=(
+            "Từ đúng, khi `found` là `false` mà model đoán được người dùng định gõ "
+            "gì: `recieve` → `receive`. `null` khi không đoán được.\n\n"
+            'Giao diện nên hiện dạng "Ý bạn là **receive**?" kèm nút tra lại.'
+        ),
+        examples=["receive"],
+    )
+    card: VocabCandidate | None = Field(
+        default=None,
+        description=(
+            "Thẻ đã dựng sẵn đủ trường, `null` khi `found` là `false`.\n\n"
+            "Với `source: YOUR_DECK` đây là **nội dung thẻ có thật của người dùng**, "
+            "kèm `already_in_deck: true` và `existing_card_id` — đừng lưu lại, hãy "
+            "mở thẻ cũ ra.\n\n"
+            "Với `source: AI` hoặc `CACHE` thì **mọi trường đều do model sinh ra**. "
+            "Service kiểm được hình dạng (độ dài, bộ ký tự, ngôn ngữ, câu ví dụ có "
+            "dùng đúng từ không) nhưng không kiểm được nghĩa có đúng hay phiên âm có "
+            "thật. Người dùng vẫn phải xem trước khi lưu."
+        ),
+    )
+    stats: VocabLookupStats

@@ -1,0 +1,9 @@
+<TU_CAN_TRA id="{{nonce}}">
+{{word}}
+</TU_CAN_TRA {{nonce}}>
+
+<NGU_CANH id="{{nonce}}">
+{{context}}
+</NGU_CANH {{nonce}}>
+
+Soạn thẻ từ vựng cho từ trên, trả về JSON đúng dạng đã mô tả.

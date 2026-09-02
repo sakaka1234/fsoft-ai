@@ -51,6 +51,8 @@ from app.sync.source import CardSource
 from app.sync.syncer import Syncer
 from app.vocab.extractor import VocabExtractor
 from app.vocab.generator import VocabGenerator
+from app.vocab.lookup import VocabLookup
+from app.vocab.word_cache import WordCache
 
 log = get_logger(__name__)
 
@@ -123,11 +125,20 @@ hơn. Ngưỡng cần giữ là **trung bình < 1.200 token mỗi lượt chat**
 
 `POST /search` và quiz với `use_ai_context=false` **luôn** 0 token.
 
-Hai endpoint `/vocab/*` thì ngược lại: **luôn** tốn token, không có nhánh rẻ
-nào. `extract` đặt chỗ tới ~5.500 trên ngân sách 6.400 token mỗi phút, còn
-`generate` rẻ hơn (~4.400) vì prompt của nó ngắn hơn nhiều. Cả hai dùng chung
-một hàng đợi, chỉ một lượt chạy tại một thời điểm. Gọi tuần tự, đừng bắn song
-song.
+Ba endpoint `/vocab/*` có ba hồ sơ chi phí rất khác nhau:
+
+| Endpoint | Đặt chỗ | Đường 0 token |
+|---|---|---|
+| `/vocab/extract` | ~5.500 / 6.400 mỗi phút | **không có** |
+| `/vocab/generate` | ~4.400 | **không có** |
+| `/vocab/lookup` | ~2.400 | **có hai** — xem `stats.source` |
+
+`extract` và `generate` dùng chung một hàng đợi, chỉ một lượt chạy tại một thời
+điểm. Gọi tuần tự, đừng bắn song song.
+
+`lookup` thì khác hẳn hai cái kia vì nó là một **nút bấm**, được gọi nhiều hơn
+hẳn. Nó có hai đường 0 token (từ đã có trong bộ thẻ, và cache dùng chung), và
+backend chỉ nên gọi tới nó **sau khi từ điển của chính backend đã trượt**.
 
 ---
 
@@ -192,12 +203,14 @@ OPENAPI_TAGS = [
     {
         "name": "Internal - Từ vựng",
         "description": (
-            "Hai đường dựng thẻ từ vựng: `extract` từ một đoạn văn người dùng "
-            "dán vào, `generate` từ một chủ đề người dùng gõ. **Luôn tốn token** "
-            "và không có đường lùi 0 token — hai endpoint đắt nhất ở đây.\n\n"
-            "Service trả về ứng viên, backend mới là bên lưu. Khác biệt quan "
-            "trọng: `extract` bảo đảm câu ví dụ có thật trong văn bản người dùng "
-            "gửi lên, `generate` thì mọi trường đều do model bịa ra."
+            "Ba đường dựng thẻ từ vựng: `extract` từ một đoạn văn người dùng dán "
+            "vào, `generate` từ một chủ đề người dùng gõ, `lookup` cho đúng một "
+            "từ.\n\n"
+            "Service trả về ứng viên, **backend mới là bên lưu**.\n\n"
+            "Hai khác biệt phải nắm: (1) `extract` bảo đảm câu ví dụ có thật "
+            "trong văn bản người dùng gửi lên, hai cái kia thì mọi trường đều do "
+            "model bịa ra; (2) chỉ `lookup` có đường 0 token, hai cái kia luôn "
+            "tốn và là hai endpoint đắt nhất ở đây."
         ),
     },
     {
@@ -271,6 +284,7 @@ class Service:
     quiz: QuizGenerator
     vocab: VocabExtractor
     vocab_generator: VocabGenerator
+    vocab_lookup: VocabLookup
 
     encoder_ready: bool = False
     index_ready: bool = False
@@ -312,6 +326,7 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
     # trong VocabExtractor.__init__: muc dich cua no la ngan sach token cua
     # TOAN he thong, nen no khong thuoc rieng endpoint nao.
     heavy_sem = asyncio.Semaphore(1)
+    word_cache = WordCache()
     prompts = PromptRegistry()
     llm = LlmClient(settings, budget, usage_repo)
     intent_classifier = IntentClassifier(encoder, min_margin=settings.ai_intent_min_margin)
@@ -378,6 +393,9 @@ def build_service(settings: Settings, encoder: Encoder | None = None) -> Service
             llm=llm,
             prompts=prompts,
             sem=heavy_sem,
+        ),
+        vocab_lookup=VocabLookup(
+            settings=settings, index=index, llm=llm, prompts=prompts, cache=word_cache
         ),
     )
 

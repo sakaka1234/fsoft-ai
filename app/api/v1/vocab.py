@@ -1,4 +1,4 @@
-"""Hai endpoint tu vung: /vocab/extract (SPEC muc 8.5b) va /vocab/generate (8.5c)."""
+"""Ba endpoint tu vung: /vocab/extract (8.5b), /vocab/generate (8.5c), /vocab/lookup (8.5d)."""
 
 from typing import Annotated
 
@@ -10,10 +10,13 @@ from app.schemas.errors import BUDGET, NOT_READY, UNAUTHORIZED, ErrorResponse
 from app.schemas.vocab import (
     VI_DU_VOCAB_EXTRACT,
     VI_DU_VOCAB_GENERATE,
+    VI_DU_VOCAB_LOOKUP,
     VocabExtractRequest,
     VocabExtractResponse,
     VocabGenerateRequest,
     VocabGenerateResponse,
+    VocabLookupRequest,
+    VocabLookupResponse,
 )
 
 router = APIRouter(
@@ -375,3 +378,158 @@ async def generate_vocab(
     topic_understood, cards, stats = await service.vocab_generator.generate(body)
 
     return VocabGenerateResponse(topic_understood=topic_understood, cards=cards, stats=stats)
+
+
+# ---------------------------------------------------------------
+# M10 — POST /internal/v1/vocab/lookup
+# ---------------------------------------------------------------
+
+LOOKUP_BAD_REQUEST: dict = {
+    400: {
+        "model": ErrorResponse,
+        "description": 'Luật nghiệp vụ, hình dạng `{"error": {...}}`.',
+        "content": {
+            "application/json": {
+                "examples": {
+                    "khong_phai_mot_tu": {
+                        "summary": "Chuỗi gửi lên không thể là một từ",
+                        "description": (
+                            "Có chữ số, dấu chấm, hay quá ba từ. Chặn ở đây là chặn "
+                            "miễn phí — không lời gọi LLM nào cứu được một chuỗi như vậy, "
+                            "mà mỗi lượt gọi hụt ăn mất một phần ngân sách của cả hệ thống.\n\n"
+                            "Chú ý: từ tiếng Anh **có thật nhưng gõ sai chính tả** KHÔNG rơi "
+                            "vào đây — nó đi tiếp và nhận `200` với `found: false`."
+                        ),
+                        "value": {
+                            "error": {
+                                "code": "INVALID_REQUEST",
+                                "message": (
+                                    "Chuỗi cần tra phải là một từ hoặc cụm nhiều nhất ba từ "
+                                    "tiếng Anh, chỉ gồm chữ cái, dấu nối hoặc dấu nháy đơn."
+                                ),
+                            }
+                        },
+                    },
+                    "qua_dai": {
+                        "summary": "Chuỗi dài hơn 64 ký tự",
+                        "value": {
+                            "error": {
+                                "code": "INVALID_REQUEST",
+                                "message": "Chuỗi cần tra dài 180 ký tự, vượt giới hạn 64 ký tự.",
+                            }
+                        },
+                    },
+                    "pham_vi_rong": {
+                        "summary": "allowed_deck_ids rỗng",
+                        "value": {
+                            "error": {
+                                "code": "INVALID_SCOPE",
+                                "message": "allowed_deck_ids không được rỗng.",
+                            }
+                        },
+                    },
+                }
+            }
+        },
+    }
+}
+
+LOOKUP_DESCRIPTION = """
+Tra **đúng một từ** và trả về thẻ từ vựng dựng sẵn đủ trường.
+
+Hai ca dùng chung một endpoint: người dùng bấm nút tra trong lúc soạn thẻ, và
+người dùng **bôi đen một từ** trong lúc đọc. Ca thứ hai gửi kèm `context` — câu
+chứa từ đó — để chọn đúng nghĩa.
+
+---
+
+### Đọc `stats.source` trước khi đọc bất cứ thứ gì khác
+
+| `source` | Token | Nghĩa |
+|---|---|---|
+| `YOUR_DECK` | **0** | Từ này **đã có** trong bộ thẻ người dùng. `card` là nội dung thẻ thật của họ |
+| `CACHE` | **0** | Đã có người tra từ này (cùng ngữ cảnh) gần đây |
+| `AI` | ~2.000 | Gọi LLM thật |
+
+`YOUR_DECK` là câu trả lời đáng giá nhất trong ba cái, và không phải vì nó miễn
+phí: người dùng đang ở màn hình **soạn thẻ mới**, nên biết mình sắp tạo thẻ
+trùng còn hữu ích hơn một thẻ mới. Giao diện nên nói thẳng ra và mời họ mở thẻ
+cũ, thay vì lặng lẽ điền vào form.
+
+### Backend chỉ nên gọi tới đây khi từ điển của mình đã trượt
+
+Ngân sách LLM là **6.400 token mỗi phút cho toàn bộ ứng dụng**. Một lượt `AI` ăn
+khoảng 2.000, nên nếu mỗi lần bấm nút đều tới thẳng đây thì cả hệ thống chỉ chịu
+được chừng ba lượt bấm một phút — và `/chat` của mọi người khác chết theo.
+
+Thứ tự đúng: **từ điển của backend → endpoint này**. Đây là đường lùi cho những
+từ từ điển không có, không phải đường chính.
+
+### Gõ sai chính tả trả 200, không phải lỗi
+
+```json
+{ "source": "AI", "found": false, "suggestion": "receive", "card": null, "stats": {...} }
+```
+
+`found: false` nghĩa là **đây không phải một từ tiếng Anh có thật**. Câu hỏi vẫn
+đã được trả lời — câu trả lời là "không có từ này". Giao diện nên hiện đúng như
+vậy, kèm gợi ý chính tả nếu có, rồi để người dùng tự điền.
+
+Service **không kiểm chứng được** cờ đó: repo không có từ điển tiếng Anh nào. Nó
+là lời của model. Nhưng hỏi thẳng vẫn tốt hơn nhiều so với để model bịa một
+nghĩa nghe rất thật cho một từ không tồn tại, rồi người học lưu vào bộ thẻ.
+
+### `card.word` có thể khác chuỗi bạn gửi lên
+
+Gửi `"Donuts"`, nhận về `"donut"`. Thẻ từ vựng cần dạng từ điển, và đó là chủ ý.
+Service kiểm rằng hai dạng vẫn là **cùng một từ** — model trả về một từ khác hẳn
+thì lượt đó bị loại.
+
+### Mọi trường đều do model sinh ra, trừ `YOUR_DECK`
+
+Service kiểm được hình dạng — độ dài, bộ ký tự, ngôn ngữ, câu ví dụ có dùng đúng
+từ không. Service **không kiểm được** nghĩa tiếng Việt có đúng không, phiên âm có
+thật không, từ có tồn tại không. Người dùng vẫn phải xem trước khi lưu, và
+frontend vẫn phải escape khi render.
+""".strip()
+
+
+@router.post(
+    "/vocab/lookup",
+    response_model=VocabLookupResponse,
+    summary="Tra nghĩa một từ, kèm câu ví dụ",
+    description=LOOKUP_DESCRIPTION,
+    responses={
+        200: {
+            "description": (
+                "Đọc `stats.source` để biết lượt này có tốn token không, và `found` "
+                "để biết `card` có phải `null` không. **`found: false` vẫn là 200.**"
+            )
+        },
+        **UNAUTHORIZED,
+        **LOOKUP_BAD_REQUEST,
+        **BUDGET,
+        **NOT_READY,
+    },
+)
+async def lookup_vocab(
+    request: Request,
+    body: Annotated[VocabLookupRequest, Body(openapi_examples=VI_DU_VOCAB_LOOKUP)],
+) -> VocabLookupResponse:
+    service = request.app.state.service
+
+    # Chỉ mục phải sẵn sàng vì đường 0 token đầu tiên đọc nó. Chỉ mục rỗng không
+    # làm hỏng gì — chỉ khiến mọi lượt tra đều rơi xuống đường AI, tức đắt hơn
+    # hẳn mà không ai biết. Chặn ở đây để cửa sổ đó không âm thầm trôi qua.
+    if not service.is_ready:
+        raise IndexNotReady("Model chưa nạp xong hoặc index chưa sẵn sàng.")
+
+    source, found, suggestion, card, stats = await service.vocab_lookup.lookup(body)
+
+    return VocabLookupResponse(
+        source=source,  # type: ignore[arg-type]
+        found=found,
+        suggestion=suggestion,
+        card=card,
+        stats=stats,
+    )

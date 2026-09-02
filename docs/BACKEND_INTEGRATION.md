@@ -3,7 +3,7 @@
 > **Đối tượng:** đội backend Java (Spring Boot).
 > **Bạn không cần đọc `SPEC.md`.** Tài liệu này tự chứa mọi thứ để tích hợp.
 >
-> **Trạng thái ngày 23/08/2026: M1 đến M9 đã xong và service đang chạy thật.** Mọi ví dụ
+> **Trạng thái ngày 23/08/2026: M1 đến M10 đã xong và service đang chạy thật.** Mọi ví dụ
 > request/response trong tài liệu này là **gọi thật vào service đang chạy**, không có ví dụ
 > nào viết tay. Chỗ nào là số đo thì có ghi rõ.
 >
@@ -928,6 +928,135 @@ không để request treo. Gọi tuần tự, và đừng gọi khi người dù
 
 ---
 
+### 5.8 `POST /internal/v1/vocab/lookup`
+
+Tra **đúng một từ**, nhận về thẻ dựng sẵn đủ trường. Hai ca dùng chung một endpoint:
+
+- người dùng bấm nút tra trong lúc soạn thẻ mới;
+- người dùng **bôi đen một từ** trong lúc đọc — ca này gửi kèm `context`.
+
+```json
+{
+  "word": "bank",
+  "context": "They sat on the river bank and watched the boats go by.",
+  "allowed_deck_ids": [1, 2, 3, 4]
+}
+```
+
+```json
+{
+  "source": "AI",
+  "found": true,
+  "suggestion": null,
+  "card": {
+    "word": "bank", "phonetic": "/bæŋk/", "part_of_speech": "noun",
+    "meaning": "bờ sông", "definition_en": "the land alongside a river",
+    "example_sentence": "We picnicked on the grassy bank all afternoon.",
+    "example_meaning": "Chúng tôi dã ngoại trên bờ cỏ suốt buổi chiều.",
+    "already_in_deck": false, "existing_card_id": null
+  },
+  "stats": {
+    "source": "AI", "word_chars": 4, "context_chars": 55, "llm_calls": 1,
+    "cache_size": 137, "prompt_tokens": 978, "completion_tokens": 611,
+    "latency_ms": 1780
+  }
+}
+```
+
+---
+
+#### ⚠️ Điều quan trọng nhất: gọi tới đây SAU khi từ điển của bạn đã trượt
+
+Ngân sách LLM là **6.400 token mỗi phút cho toàn bộ ứng dụng**, dùng chung với
+`/chat`, `/quiz` và hai endpoint `/vocab/*` kia. Một lượt `AI` ở đây đặt chỗ
+khoảng **2.400**, nên nếu mỗi lần bấm nút đều tới thẳng đây thì cả hệ thống chỉ
+chịu được chừng **ba lượt bấm một phút** — và `/chat` của mọi người khác chết theo.
+
+Thứ tự đúng:
+
+```
+người dùng bấm "Look up"
+   |
+   v
+1. từ điển của backend            0 token, nhanh, phủ phần lớn từ thông dụng
+   |  có mục từ?  -> trả về luôn, HẾT
+   |  không có?
+   v
+2. POST /internal/v1/vocab/lookup
+```
+
+Ảnh giao diện hiện tại đã hiện đúng câu *"No dictionary entry for that word"* —
+đó chính là chỗ nên gọi tới endpoint này thay vì bắt người dùng tự điền tay.
+
+#### Đọc `stats.source` trước mọi thứ khác
+
+| `source` | Token | Nghĩa | Giao diện nên làm gì |
+|---|---|---|---|
+| `YOUR_DECK` | **0** | Từ **đã có** trong bộ thẻ người dùng | **Báo trùng**, mời họ mở thẻ cũ |
+| `CACHE` | **0** | Đã có người tra từ này gần đây | Điền vào form như bình thường |
+| `AI` | ~2.400 | Gọi LLM thật | Điền vào form như bình thường |
+
+`YOUR_DECK` là câu trả lời đáng giá nhất, và không phải vì nó miễn phí: người
+dùng đang ở màn hình **soạn thẻ mới**, nên biết mình sắp tạo thẻ trùng còn hữu
+ích hơn một thẻ mới. `card.existing_card_id` là id thẻ cũ — hãy cho họ một nút
+mở thẳng nó, đừng lặng lẽ điền vào form rồi để họ tạo bản sao thứ hai.
+
+Theo dõi tỉ lệ ba giá trị này trong `GET /internal/v1/stats` (`by_task` có dòng
+`VOCAB_LOOKUP`). Tỉ lệ `AI` cao bất thường nghĩa là từ điển phía backend đang bị
+bỏ qua ở đâu đó.
+
+#### Năm cái bẫy
+
+**1. Gõ sai chính tả trả `200`, không phải lỗi.**
+
+```json
+{ "source": "AI", "found": false, "suggestion": "receive", "card": null, ... }
+```
+
+`found: false` nghĩa là **đây không phải một từ tiếng Anh có thật**, và `card` là
+`null`. Đừng coi là lỗi — câu hỏi đã được trả lời, câu trả lời là "không có từ
+này". Giao diện nên hiện *"Không tìm thấy từ này. Ý bạn là **receive**?"* kèm nút
+tra lại, rồi để người dùng tự điền nếu họ vẫn muốn.
+
+Service **không kiểm chứng được** cờ đó — nó là lời của model. Nhưng hỏi thẳng
+vẫn tốt hơn hẳn để model bịa một nghĩa nghe rất thật cho một từ không tồn tại,
+rồi người học lưu vào bộ thẻ và học thuộc nó.
+
+**2. `card.word` có thể khác chuỗi bạn gửi lên.** Gửi `"Donuts"`, nhận `"donut"`
+— thẻ từ vựng cần dạng từ điển, và đó là chủ ý. Đừng so sánh hai chuỗi rồi báo
+lỗi. Service đã kiểm rằng hai dạng vẫn là cùng một từ; model trả về một từ khác
+hẳn thì lượt đó bị loại và bạn nhận `503`.
+
+**3. `word` sai định dạng trả `400`, nhưng SAI CHÍNH TẢ THÌ KHÔNG.** Chuỗi có
+chữ số, dấu chấm, hay quá ba từ bị chặn ngay ở `400` với `{"error": {...}}` —
+không lời gọi LLM nào cứu được nó. Nhưng `recieve` là chuỗi hợp lệ về hình dạng,
+nó đi tiếp và nhận `200` với `found: false`. Đừng gộp hai ca này làm một.
+
+`context` thì ngược lại: dài quá 300 ký tự bị **cắt**, không báo lỗi. Bôi đen một
+câu dài không bao giờ nên là lỗi.
+
+**4. Đường 0 token vẫn chạy khi hết hạn mức.** Nếu `/chat` đang trả `429` vì cạn
+ngân sách, endpoint này **vẫn** trả lời được cho từ đã có trong bộ thẻ. Đừng tắt
+nút tra chỉ vì thấy 429 ở chỗ khác.
+
+**5. Cache dùng chung giữa mọi người dùng — và điều đó an toàn.** Nghĩa của từ
+`donut` không phụ thuộc bộ thẻ của ai, nên một người tra rồi thì mọi người sau
+đều miễn phí. Hai cờ `already_in_deck` / `existing_card_id` **không** nằm trong
+cache; chúng được tính lại theo `allowed_deck_ids` của từng request, nên không
+bao giờ lộ thẻ của người khác.
+
+> **Với `source: AI` và `CACHE`, mọi trường đều do model sinh ra.** Service kiểm
+> được hình dạng — độ dài, bộ ký tự, ngôn ngữ, câu ví dụ có dùng đúng từ không —
+> nhưng **không** kiểm được nghĩa tiếng Việt có đúng, phiên âm có thật, hay từ có
+> tồn tại. Người dùng vẫn phải xem trước khi lưu, và **frontend vẫn phải escape
+> khi render**: Markdown renderer có `html: false` hoặc DOMPurify, tuyệt đối
+> không `dangerouslySetInnerHTML` / `v-html` / `th:utext`.
+>
+> Riêng `source: YOUR_DECK` thì khác: đó là nội dung thẻ thật của chính người
+> dùng, không có chữ nào do model sinh.
+
+---
+
 ## 6. Định dạng lỗi
 
 fsoft-ai **không** dùng bọc `ApiResponse` như backend Java. Mọi lỗi có dạng:
@@ -1098,6 +1227,15 @@ Chạy bằng Docker: xem [`DOCKER.md`](DOCKER.md).
 - [ ] Thẻ lưu từ endpoint này mang cờ xuất xứ (`generated_by: AI_TOPIC` hoặc tương đương)
 - [ ] Mọi trường được **escape khi render**, không `dangerouslySetInnerHTML` / `v-html` / `th:utext`
 - [ ] Có đường để người dùng báo cáo thẻ không phù hợp
+
+**Phía Java — riêng cho `/vocab/lookup` ([mục 5.8](#58-post-internalv1vocablookup))**
+
+- [ ] **Từ điển của backend chạy TRƯỚC**, endpoint này chỉ là đường lùi khi trượt
+- [ ] `found: false` được xử lý như một câu trả lời hợp lệ, không phải lỗi
+- [ ] `source: YOUR_DECK` hiện cảnh báo trùng kèm nút mở thẻ cũ, không lặng lẽ
+      điền vào form
+- [ ] Không so `card.word` với chuỗi gửi lên rồi báo lỗi — dạng từ điển khác là đúng
+- [ ] Nút tra **không** bị tắt khi `/chat` đang 429: đường 0 token vẫn chạy
 
 **Phía hạ tầng**
 
