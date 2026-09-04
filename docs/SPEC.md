@@ -1208,7 +1208,7 @@ một endpoint: người dùng bấm nút tra trong lúc soạn thẻ, và ngư�
 |---|---|---|
 | `word` | có | Tối đa 64 ký tự; chuẩn hoá xong phải là một từ hoặc cụm ≤ 3 từ |
 | `context` | không | Tối đa 300 ký tự. Vượt thì **cắt**, không báo lỗi |
-| `allowed_deck_ids` | có | Rỗng → `400 INVALID_SCOPE`. Chỉ dùng để kiểm "đã có chưa" |
+| `allowed_deck_ids` | **không** | Bỏ hẳn: vẫn tra được, không kiểm trùng, `already_in_deck` luôn `false`. Gửi `[]`: `400 INVALID_SCOPE` |
 
 ```json
 {
@@ -1304,6 +1304,19 @@ so với soạn một thẻ hoàn chỉnh.
    model trả về một từ khác hẳn thì lượt đó bị loại (`503`), vì nếu không thì
    người dùng gõ `donut` lại nhận về thẻ hoàn chỉnh của một từ khác, trông
    hoàn toàn hợp lệ.
+
+#### `allowed_deck_ids` tuỳ chọn — vì sao chỉ endpoint này được lệch
+
+Tra một từ vẫn có nghĩa khi không gắn với bộ thẻ nào: người dùng có thể tra ở
+màn hình không thuộc deck cụ thể. Bỏ field này (hoặc gửi `null`) thì lượt tra
+chạy bình thường qua `CACHE`/`AI`, chỉ mất hai việc phụ thuộc phạm vi — đường
+`YOUR_DECK` tắt hẳn và `already_in_deck` luôn là `false` (giá trị mặc định an
+toàn của cache). Cách rẻ nhất để tra không kiểm trùng là bỏ field.
+
+Gửi **mảng rỗng** `[]` thì vẫn là `400 INVALID_SCOPE`: rỗng nghĩa là KHÔNG
+ĐƯỢC PHÉP GÌ, luật chung của toàn hệ thống, không có ngoại lệ. Hai trạng thái
+"không khai báo" (`null`) và "khai báo bằng không" (`[]`) phải được phân biệt
+rõ ở mọi endpoint — chỉ có endpoint này nhận trạng thái thứ nhất.
 
 ### 8.6 Định dạng lỗi
 

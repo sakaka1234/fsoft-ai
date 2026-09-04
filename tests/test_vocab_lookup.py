@@ -121,6 +121,97 @@ async def test_allowed_deck_ids_rong_thi_400_invalid_scope(tra_service: Service)
     assert fake.call_count == 0
 
 
+async def test_khong_gui_allowed_deck_ids_van_tra_duoc(tra_service: Service) -> None:
+    """
+    `allowed_deck_ids` TUỲ CHỌN ở endpoint này: bỏ field vẫn tra được.
+
+    Tra một từ có nghĩa cả khi không gắn với bộ thẻ nào, nên ép khai deck là
+    bắt người gọi bịa danh sách giả. Bỏ field thì hai việc phụ thuộc phạm vi
+    tự tắt — đường `YOUR_DECK` không chạy, hai cờ giữ giá trị mặc định an toàn
+    của cache — còn đường cache/AI chạy như thường.
+    """
+
+    fake = FakeGroq([tra_loi()])
+    service = with_groq(tra_service, fake)
+
+    source, found, _, the, stats = await tra(
+        service,
+        allowed_deck_ids=None,  # type: ignore[arg-type]
+    )
+
+    assert (source, found) == ("AI", True)
+    assert the is not None
+    assert the.already_in_deck is False
+    assert the.existing_card_id is None
+    assert stats.llm_calls == 1
+    assert fake.call_count == 1
+
+
+async def test_khong_gui_pham_vi_ma_tu_da_co_KHONG_bao_YOUR_DECK(tra_service: Service) -> None:
+    """
+    Không khai phạm vi thì không thể khẳng định "từ này người dùng đã có" —
+    ngay cả khi `resilient` (thẻ 101) đang nằm trong chỉ mục.
+
+    Nhìn ra ngoài ranh giới để báo trùng chính là lỗ hổng mà các endpoint khác
+    chặn; endpoint này được phép bỏ ranh giới, đổi lại phải bỏ luôn câu trả
+    lời phụ thuộc ranh giới đó, chứ không được giữ lấy phần có lợi.
+    """
+
+    fake = FakeGroq([tra_loi(word="resilient", cau="She stayed resilient all week.")])
+    service = with_groq(tra_service, fake)
+
+    source, found, _, the, _ = await tra(
+        service,
+        word="resilient",
+        allowed_deck_ids=None,  # type: ignore[arg-type]
+    )
+
+    assert (source, found) == ("AI", True)
+    assert the is not None
+    assert the.already_in_deck is False
+    assert the.existing_card_id is None
+    assert fake.call_count == 1
+
+
+async def test_khong_gui_pham_vi_van_an_duoc_cache(tra_service: Service) -> None:
+    """Cache dùng chung toàn cục, không phụ thuộc phạm vi — lượt không khai deck vẫn dùng được."""
+
+    fake = FakeGroq([tra_loi()])
+    service = with_groq(tra_service, fake)
+
+    await tra(service)
+    source, found, _, the, _ = await tra(
+        service,
+        allowed_deck_ids=None,  # type: ignore[arg-type]
+    )
+
+    assert (source, found) == ("CACHE", True)
+    assert the is not None
+    assert the.word == "donut"
+    assert the.already_in_deck is False
+    assert the.existing_card_id is None
+
+
+async def test_gui_null_khac_gui_mang_rong(tra_service: Service) -> None:
+    """Hai trạng thái phải phân biệt rõ: `null` = không khai báo, `[]` = khai báo bằng không."""
+
+    fake = FakeGroq([tra_loi()])
+    service = with_groq(tra_service, fake)
+
+    # `null` hợp lệ.
+    source, _, _, the, _ = await tra(
+        service,
+        allowed_deck_ids=None,  # type: ignore[arg-type]
+    )
+
+    assert source == "AI"
+    assert the is not None
+
+    # `[]` vẫn là 400, đúng luật chung của hệ thống.
+    with pytest.raises(InvalidScope):
+        await tra(service, allowed_deck_ids=[])
+
+
 async def test_sai_chinh_ta_KHONG_bi_chan_o_400(tra_service: Service) -> None:
     """
     `recieve` là chuỗi hợp lệ về hình dạng, chỉ sai chính tả.
@@ -633,6 +724,34 @@ def test_lookup_can_token(tra_client: TestClient) -> None:
     )
 
     assert tra_ve.status_code == 401
+
+
+def test_khong_gui_pham_vi_tra_duoc_qua_http(tra_client: TestClient) -> None:
+    """
+    Request chỉ có `word` — không field `allowed_deck_ids` — vẫn là 200.
+
+    Seed cache trước để lượt này đi đường 0 token: fixture HTTP không có fake
+    Groq, còn đường AI thật thì đắt và bấp bênh. Đây cũng là ca thật — người
+    tra sau hưởng kết quả người tra trước, bất kể ai khai phạm vi nào.
+    """
+    from app.schemas.vocab import VocabCandidate
+
+    the = VocabCandidate(
+        word="donut",
+        meaning="bánh vòng",
+        example_sentence="He ate a donut with his morning coffee.",
+        already_in_deck=False,
+    )
+    tra_client.app.state.service.vocab_lookup._cache.put(khoa_cache("donut", ""), the)
+
+    tra_ve = tra_client.post("/internal/v1/vocab/lookup", headers=HEADERS, json={"word": "donut"})
+
+    assert tra_ve.status_code == 200
+    body = tra_ve.json()
+    assert body["source"] == "CACHE"
+    assert body["found"] is True
+    assert body["card"]["already_in_deck"] is False
+    assert body["card"]["existing_card_id"] is None
 
 
 def test_tu_da_co_tra_ve_qua_http_khong_ton_token(tra_client: TestClient) -> None:

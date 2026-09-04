@@ -943,25 +943,11 @@ Tra **đúng một từ**, nhận về thẻ dựng sẵn đủ trường. Hai c
 }
 ```
 
-```json
-{
-  "source": "AI",
-  "found": true,
-  "suggestion": null,
-  "card": {
-    "word": "bank", "phonetic": "/bæŋk/", "part_of_speech": "noun",
-    "meaning": "bờ sông", "definition_en": "the land alongside a river",
-    "example_sentence": "We picnicked on the grassy bank all afternoon.",
-    "example_meaning": "Chúng tôi dã ngoại trên bờ cỏ suốt buổi chiều.",
-    "already_in_deck": false, "existing_card_id": null
-  },
-  "stats": {
-    "source": "AI", "word_chars": 4, "context_chars": 55, "llm_calls": 1,
-    "cache_size": 137, "prompt_tokens": 978, "completion_tokens": 611,
-    "latency_ms": 1780
-  }
-}
-```
+**`allowed_deck_ids` ở đây TUỲ CHỌN** — khác với mọi endpoint khác. Bỏ field
+thì lượt tra vẫn chạy qua `CACHE`/`AI` bình thường, chỉ mất kiểm trùng: không
+bao giờ có `source: YOUR_DECK`, `already_in_deck` luôn `false`. Hợp lệ khi tra
+từ ở màn hình không gắn với deck nào. Ngược lại gửi `[]` vẫn là `400
+INVALID_SCOPE` — muốn "không kiểm trùng" thì bỏ field, đừng gửi mảng rỗng.
 
 ---
 
@@ -1038,6 +1024,12 @@ câu dài không bao giờ nên là lỗi.
 **4. Đường 0 token vẫn chạy khi hết hạn mức.** Nếu `/chat` đang trả `429` vì cạn
 ngân sách, endpoint này **vẫn** trả lời được cho từ đã có trong bộ thẻ. Đừng tắt
 nút tra chỉ vì thấy 429 ở chỗ khác.
+
+**4b. `allowed_deck_ids` tuỳ chọn — bỏ field khác với gửi `[]`.** Bỏ field:
+tra vẫn chạy, `already_in_deck` luôn `false`, không bao giờ có `YOUR_DECK`.
+Gửi `[]`: `400 INVALID_SCOPE`. Khi bỏ field, nhớ rằng giao diện không còn cách
+nào biết người dùng sắp tạo thẻ trùng — nếu màn hình đang soạn thẻ cho một deck
+cụ thể thì HÃY gửi phạm vi, vì `YOUR_DECK` mới là cảnh báo có giá trị nhất.
 
 **5. Cache dùng chung giữa mọi người dùng — và điều đó an toàn.** Nghĩa của từ
 `donut` không phụ thuộc bộ thẻ của ai, nên một người tra rồi thì mọi người sau

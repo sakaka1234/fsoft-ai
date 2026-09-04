@@ -28,6 +28,12 @@ Ba chỗ cố ý khác `generate`:
 3. Có cache dùng chung TOÀN CỤC. Nghĩa của một từ không phụ thuộc bộ thẻ của
    ai, nên không có gì để rò rỉ giữa hai người dùng — khác hẳn cache của `/chat`
    vốn bắt buộc phải khoá theo phạm vi deck.
+
+`allowed_deck_ids` ở đây TUỲ CHỌN: tra từ có nghĩa cả khi không gắn với deck nào
+nào (ví dụ tra ở màn hình không thuộc bộ thẻ cụ thể). Không khai phạm vi thì
+đường `YOUR_DECK` và việc đánh dấu trùng tự tắt — hai cờ giữ giá trị mặc định
+an toàn — còn đường cache/AI chạy như thường. Danh sách RỖNG có mặt thì vẫn là
+400, đúng luật chung của hệ thống: rỗng nghĩa là KHÔNG ĐƯỢC PHÉP GÌ.
 """
 
 import json
@@ -134,12 +140,15 @@ class VocabLookup:
 
         tu, ngu_canh = self._tien_xu_ly(request)
         bat_dau = time.perf_counter()
+        pham_vi = request.allowed_deck_ids or None
 
         # --- Đường 1: người dùng đã có từ này. 0 token. ---
         #
         # Vừa miễn phí vừa là thông tin ĐÚNG LÚC NHẤT: họ đang ở màn hình soạn
         # thẻ, nên biết mình sắp tạo thẻ trùng còn giá trị hơn một thẻ mới.
-        da_co = self._index.lookup_word(tu, request.allowed_deck_ids)
+        # Bỏ qua hẳn khi request không khai phạm vi — `lookup_word` với danh
+        # sách rỗng vốn trả `[]`, nên nhánh này tự tắt đúng như ý.
+        da_co = self._index.lookup_word(tu, pham_vi) if pham_vi else []
 
         if da_co:
             the_cu = self._index.get(min(da_co))
@@ -158,7 +167,7 @@ class VocabLookup:
         trong_cache = self._cache.get(khoa)
 
         if trong_cache is not None:
-            self._danh_dau(trong_cache, request.allowed_deck_ids)
+            self._danh_dau(trong_cache, pham_vi)
 
             return (
                 "CACHE",
@@ -220,7 +229,7 @@ class VocabLookup:
         # Cache TRƯỚC khi đánh dấu trùng: `WordCache.put` tự xoá hai cờ, nhưng
         # gọi đúng thứ tự vẫn rẻ hơn là dựa vào nó.
         self._cache.put(khoa, the)
-        self._danh_dau(the, request.allowed_deck_ids)
+        self._danh_dau(the, pham_vi)
         stats.cache_size = self._cache.size
 
         return "AI", True, None, the, stats
@@ -236,7 +245,11 @@ class VocabLookup:
                 f"{MAX_WORD_INPUT_CHARS} ký tự."
             )
 
-        if not request.allowed_deck_ids:
+        # `allowed_deck_ids` TUỲ CHỌN ở endpoint này: bỏ hẳn là tra không kiểm
+        # trùng, vẫn hợp lệ. Chỉ danh sách RỖNG có mặt mới là phạm vi bằng không
+        # — giữ nguyên luật 400 như hai endpoint kia, và dùng `None` để phân biệt
+        # hai trạng thái đó thay vì ép mọi lượt gọi đều phải khai deck.
+        if request.allowed_deck_ids is not None and not request.allowed_deck_ids:
             raise InvalidScope("allowed_deck_ids không được rỗng.")
 
         tu = chuan_hoa(sanitize(request.word, MAX_WORD_INPUT_CHARS).translate(_BANG_BO))
@@ -277,13 +290,20 @@ class VocabLookup:
             else int((time.perf_counter() - bat_dau) * 1000),
         )
 
-    def _danh_dau(self, the: VocabCandidate, allowed_deck_ids: list[int]) -> None:
+    def _danh_dau(self, the: VocabCandidate, allowed_deck_ids: list[int] | None) -> None:
         """
         Đánh dấu trùng SAU khi đọc cache.
 
         Bắt buộc phải làm ở đây chứ không lưu sẵn vào cache: hai cờ này phụ
         thuộc phạm vi deck của TỪNG người dùng, còn cache thì dùng chung.
+
+        `allowed_deck_ids` là `None` khi request không khai phạm vi: không có
+        ranh giới thì không thể khẳng định "đã có", nên bỏ qua thay vì trả cờ
+        sai. Cache vẫn cho thẻ sạch nên không cần xoá gì.
         """
+
+        if not allowed_deck_ids:
+            return
 
         trung = self._index.lookup_word(the.word, allowed_deck_ids)
 

@@ -421,6 +421,10 @@ LOOKUP_BAD_REQUEST: dict = {
                     },
                     "pham_vi_rong": {
                         "summary": "allowed_deck_ids rỗng",
+                        "description": (
+                            "Khác với bỏ hẳn field: rỗng là khai báo phạm vi bằng "
+                            "không. Bỏ field thì tra vẫn chạy, chỉ mất kiểm trùng."
+                        ),
                         "value": {
                             "error": {
                                 "code": "INVALID_SCOPE",
@@ -440,6 +444,15 @@ Tra **đúng một từ** và trả về thẻ từ vựng dựng sẵn đủ tr
 Hai ca dùng chung một endpoint: người dùng bấm nút tra trong lúc soạn thẻ, và
 người dùng **bôi đen một từ** trong lúc đọc. Ca thứ hai gửi kèm `context` — câu
 chứa từ đó — để chọn đúng nghĩa.
+
+### `allowed_deck_ids` là tuỳ chọn ở endpoint này
+
+Bỏ field này vẫn tra được bình thường qua `CACHE`/`AI` — hữu ích khi tra từ ở
+màn hình không gắn với bộ thẻ cụ thể. Mất duy nhất hai việc phụ thuộc phạm vi:
+không bao giờ có `source: YOUR_DECK` và `already_in_deck` luôn là `false`.
+
+Gửi **mảng rỗng** `[]` thì khác: đó là khai báo phạm vi bằng không → 400
+`INVALID_SCOPE`, đúng luật chung. Muốn tắt kiểm trùng thì bỏ field, đừng gửi `[]`.
 
 ---
 

@@ -689,6 +689,16 @@ VI_DU_VOCAB_LOOKUP: dict = {
         ),
         "value": {"word": "recieve", "allowed_deck_ids": [1, 2, 3, 4]},
     },
+    "khong_gui_pham_vi": {
+        "summary": "Không gửi allowed_deck_ids — vẫn tra được",
+        "description": (
+            "`allowed_deck_ids` là TUỲ CHỌN ở endpoint này. Bỏ nó thì lượt tra vẫn "
+            "chạy qua cache/AI bình thường, chỉ mất hai việc phụ thuộc phạm vi: "
+            "không bao giờ trả `source: YOUR_DECK` và `already_in_deck` luôn là "
+            "`false`. Hợp lệ khi tra từ ở màn hình không gắn với deck nào."
+        ),
+        "value": {"word": "donut"},
+    },
 }
 
 
@@ -724,12 +734,20 @@ class VocabLookupRequest(BaseModel):
         ),
         examples=["They sat on the river bank and watched the boats go by."],
     )
-    allowed_deck_ids: list[int] = Field(
+    allowed_deck_ids: list[int] | None = Field(
+        default=None,
         description=(
-            "Phạm vi bộ thẻ. Rỗng → **400 `INVALID_SCOPE`**.\n\n"
-            "Ở đây nó dùng cho một việc duy nhất: kiểm xem người dùng **đã có** từ "
-            "này chưa. Có rồi thì trả thẳng nội dung thẻ đó, `source: YOUR_DECK`, "
-            "**0 token** — và giao diện nên báo ngay là họ sắp tạo thẻ trùng."
+            "Phạm vi bộ thẻ — **tuỳ chọn**. Gửi `null` hoặc bỏ hẳn field vẫn tra "
+            "được bình thường qua cache/AI; chỉ mất hai việc phụ thuộc phạm vi: "
+            "không bao giờ có `source: YOUR_DECK` và `already_in_deck` luôn là "
+            "`false`.\n\n"
+            "Gửi DANH SÁCH RỖNG `[]` thì khác: đó là khai báo phạm vi bằng không "
+            "→ **400 `INVALID_SCOPE`**, giống mọi endpoint khác. Cách rẻ nhất để "
+            "tắt kiểm trùng là bỏ field, đừng gửi mảng rỗng.\n\n"
+            "Khi có mặt, nó dùng cho một việc duy nhất: kiểm xem người dùng **đã "
+            "có** từ này chưa. Có rồi thì trả thẳng nội dung thẻ đó, "
+            "`source: YOUR_DECK`, **0 token** — và giao diện nên báo ngay là họ "
+            "sắp tạo thẻ trùng."
         ),
         examples=[[1, 2, 3, 4]],
     )
